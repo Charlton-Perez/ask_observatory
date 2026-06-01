@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { parseCSV, buildSummary } from './dataParser'
 import styles from './App.module.css'
 
@@ -20,53 +20,30 @@ function checkAccess() {
 export default function App() {
   const [hasAccess] = useState(checkAccess)
   const [summary, setSummary] = useState(null)
-  const [fileName, setFileName] = useState(null)
-  const [loading, setLoading] = useState(false)
-  const [parseError, setParseError] = useState(null)
+  const [loadError, setLoadError] = useState(null)
   const [messages, setMessages] = useState([])
   const [question, setQuestion] = useState('')
   const [asking, setAsking] = useState(false)
-  const [dragOver, setDragOver] = useState(false)
   const bottomRef = useRef(null)
-  const fileInputRef = useRef(null)
   const token = new URLSearchParams(window.location.search).get('token')
+
+  useEffect(() => {
+    if (!hasAccess) return
+    fetch('/ruao_data.csv')
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text() })
+      .then(text => setSummary(buildSummary(parseCSV(text))))
+      .catch(e => setLoadError('Could not load dataset: ' + e.message))
+  }, [hasAccess])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, asking])
 
-  const processFile = useCallback(async (file) => {
-    if (!file) return
-    setParseError(null)
-    setLoading(true)
-    setMessages([])
-    setSummary(null)
-    setFileName(file.name)
-    try {
-      const text = await file.text()
-      const rows = parseCSV(text)
-      const s = buildSummary(rows)
-      setSummary(s)
-    } catch (e) {
-      setParseError('Could not parse file: ' + e.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  const onFileChange = e => processFile(e.target.files[0])
-  const onDrop = e => {
-    e.preventDefault()
-    setDragOver(false)
-    processFile(e.dataTransfer.files[0])
-  }
-
   const askQuestion = async (q) => {
     const text = (q || question).trim()
     if (!text || !summary || asking) return
     setQuestion('')
-    const userMsg = { role: 'user', text }
-    setMessages(prev => [...prev, userMsg])
+    setMessages(prev => [...prev, { role: 'user', text }])
     setAsking(true)
     try {
       const res = await fetch('/api/chat', {
@@ -111,26 +88,15 @@ export default function App() {
       </header>
 
       <main className={styles.main}>
-        {!summary && (
-          <div
-            className={`${styles.dropzone} ${dragOver ? styles.dropzoneActive : ''}`}
-            onDragOver={e => { e.preventDefault(); setDragOver(true) }}
-            onDragLeave={() => setDragOver(false)}
-            onDrop={onDrop}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <input ref={fileInputRef} type="file" accept=".csv" hidden onChange={onFileChange} />
-            {loading ? (
-              <p className={styles.dropText}>Parsing data&hellip;</p>
-            ) : (
-              <>
-                <div className={styles.dropIcon}>&#8679;</div>
-                <p className={styles.dropTitle}>Upload observatory data</p>
-                <p className={styles.dropText}>Drag and drop a CSV file here, or click to browse</p>
-                <p className={styles.dropHint}>Expected format: year, month, day, Pmsl, Tdry, Twet, RH, Tx, Tn &hellip;</p>
-              </>
-            )}
-            {parseError && <p className={styles.error}>{parseError}</p>}
+        {!summary && !loadError && (
+          <div className={styles.loading}>
+            <p>Loading observatory data&hellip;</p>
+          </div>
+        )}
+
+        {loadError && (
+          <div className={styles.loading}>
+            <p className={styles.error}>{loadError}</p>
           </div>
         )}
 
@@ -139,11 +105,8 @@ export default function App() {
             <div className={styles.dataCard}>
               <span className={styles.dataTag}>Dataset loaded</span>
               <span className={styles.dataInfo}>
-                <strong>{fileName}</strong> &mdash; {summary.overview.totalDays.toLocaleString()} daily records &mdash; {summary.overview.startDate} to {summary.overview.endDate}
+                {summary.overview.totalDays.toLocaleString()} daily records &mdash; {summary.overview.startDate} to {summary.overview.endDate}
               </span>
-              <button className={styles.resetBtn} onClick={() => { setSummary(null); setMessages([]) }}>
-                Change file
-              </button>
             </div>
 
             {messages.length === 0 && (
