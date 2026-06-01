@@ -1,15 +1,17 @@
 import { useState, useRef, useEffect } from 'react'
-import { parseCSV, buildSummary, buildIndex, extractDates } from './dataParser'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { parseCSV, buildSummary, buildDayIndex, buildCalendarDayIndex, extractDateReferences } from './dataParser'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
 
 const EXAMPLE_QUESTIONS = [
   'What is the hottest temperature ever recorded in October?',
-  'Which month has the highest average daily maximum temperature?',
-  'What was the coldest day on record and when did it occur?',
-  'How has the annual mean maximum temperature changed over the decades?',
-  'What is the average pressure in January?',
+  'Where would a temperature of 30°C rank among all-time 2nd Junes?',
+  'What was the weather like on 14 October 1987?',
+  'Which year had the warmest summer on record?',
+  'What is the average January pressure, and how does it vary year to year?',
 ]
 
 function checkAccess() {
@@ -21,6 +23,7 @@ export default function App() {
   const [hasAccess] = useState(checkAccess)
   const [summary, setSummary] = useState(null)
   const [dayIndex, setDayIndex] = useState(null)
+  const [calendarIndex, setCalendarIndex] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [messages, setMessages] = useState([])
   const [question, setQuestion] = useState('')
@@ -35,7 +38,8 @@ export default function App() {
       .then(text => {
         const rows = parseCSV(text)
         setSummary(buildSummary(rows))
-        setDayIndex(buildIndex(rows))
+        setDayIndex(buildDayIndex(rows))
+        setCalendarIndex(buildCalendarDayIndex(rows))
       })
       .catch(e => setLoadError('Could not load dataset: ' + e.message))
   }, [hasAccess])
@@ -51,12 +55,21 @@ export default function App() {
     setMessages(prev => [...prev, { role: 'user', text }])
     setAsking(true)
     try {
-      const dates = extractDates(text)
-      const dailyRows = dates.map(d => dayIndex[d]).filter(Boolean)
+      const { specificDates, calendarDays } = extractDateReferences(text)
+
+      // Specific full dates (e.g. "14 October 1987")
+      const dailyRows = specificDates.map(d => dayIndex[d]).filter(Boolean)
+
+      // Calendar-day slices (e.g. all "2nd June" records across all years)
+      const calendarSlices = calendarDays.reduce((acc, key) => {
+        if (calendarIndex[key]) acc[key] = calendarIndex[key]
+        return acc
+      }, {})
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, summary, dailyRows, token }),
+        body: JSON.stringify({ question: text, summary, dailyRows, calendarSlices, token }),
       })
       if (!res.ok) throw new Error(await res.text())
       const { answer } = await res.json()
@@ -96,15 +109,10 @@ export default function App() {
 
       <main className={styles.main}>
         {!summary && !loadError && (
-          <div className={styles.loading}>
-            <p>Loading observatory data&hellip;</p>
-          </div>
+          <div className={styles.loading}><p>Loading observatory data&hellip;</p></div>
         )}
-
         {loadError && (
-          <div className={styles.loading}>
-            <p className={styles.error}>{loadError}</p>
-          </div>
+          <div className={styles.loading}><p className={styles.error}>{loadError}</p></div>
         )}
 
         {summary && (
@@ -133,7 +141,12 @@ export default function App() {
               {messages.map((m, i) => (
                 <div key={i} className={`${styles.bubble} ${m.role === 'user' ? styles.bubbleUser : styles.bubbleAssistant} ${m.error ? styles.bubbleError : ''}`}>
                   {m.role === 'assistant' && <span className={styles.bubbleLabel}>Observatory AI</span>}
-                  <p className={styles.bubbleText}>{m.text}</p>
+                  {m.role === 'user'
+                    ? <p className={styles.bubbleText}>{m.text}</p>
+                    : <div className={styles.markdown}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+                      </div>
+                  }
                 </div>
               ))}
               {asking && (
