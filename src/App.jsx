@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { parseCSV, buildSummary, buildDayIndex, buildCalendarDayIndex, extractDateReferences } from './dataParser'
+import { parseCSV, buildSummary, buildDayIndex, buildCalendarDayIndex, extractDateReferences, detectFields, getDayRows, getCalendarSlices } from './dataParser'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
@@ -56,15 +56,11 @@ export default function App() {
     setAsking(true)
     try {
       const { specificDates, calendarDays } = extractDateReferences(text)
+      const fields = detectFields(text)
 
-      // Specific full dates (e.g. "14 October 1987")
-      const dailyRows = specificDates.map(d => dayIndex[d]).filter(Boolean)
-
-      // Calendar-day slices (e.g. all "2nd June" records across all years)
-      const calendarSlices = calendarDays.reduce((acc, key) => {
-        if (calendarIndex[key]) acc[key] = calendarIndex[key]
-        return acc
-      }, {})
+      // Only send the fields the question is actually about
+      const dailyRows = getDayRows(dayIndex, specificDates, fields)
+      const calendarSlices = getCalendarSlices(calendarIndex, calendarDays, fields)
 
       const res = await fetch('/api/chat', {
         method: 'POST',
