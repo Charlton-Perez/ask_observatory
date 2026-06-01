@@ -11,19 +11,31 @@ Fields: Tx = daily max temp (°C), Tn = daily min temp (°C), Tdry = 09 UTC dry-
 export default async function handler(req) {
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
 
-  const { question, context, dailyRows, calendarSlices, token } = await req.json()
+  const { question, context, dailyRows, calendarSlices, history, token } = await req.json()
 
   if (token !== process.env.INVITE_TOKEN) return new Response('Unauthorized', { status: 401 })
   if (!question || !context) return new Response('Missing question or context', { status: 400 })
 
-  let userMessage = `Dataset context:\n${JSON.stringify(context)}`
-  if (dailyRows?.length > 0) {
-    userMessage += `\n\nRaw daily record(s) for the date(s) mentioned:\n${JSON.stringify(dailyRows)}`
-  }
-  if (calendarSlices && Object.keys(calendarSlices).length > 0) {
-    userMessage += `\n\nAll historical records for the calendar day(s) mentioned (sorted by Tx descending — use these for ranking questions):\n${JSON.stringify(calendarSlices)}`
-  }
-  userMessage += `\n\nQuestion: ${question}`
+  // The dataset context is only sent once, as the first user turn, so it doesn't
+  // repeat with every message and inflate costs as the conversation grows.
+  const dataContext = [`Dataset context:\n${JSON.stringify(context)}`]
+  if (dailyRows?.length > 0)
+    dataContext.push(`Raw daily record(s) for the date(s) mentioned:\n${JSON.stringify(dailyRows)}`)
+  if (calendarSlices && Object.keys(calendarSlices).length > 0)
+    dataContext.push(`All historical records for the calendar day(s) mentioned (sorted by Tx descending):\n${JSON.stringify(calendarSlices)}`)
+
+  // Build the full message list: context preamble + prior turns + current question
+  const priorMessages = (history || []).map(m => ({
+    role: m.role === 'user' ? 'user' : 'assistant',
+    content: m.text,
+  }))
+
+  const messages = [
+    { role: 'user',      content: dataContext.join('\n\n') },
+    { role: 'assistant', content: 'Understood — I have the full dataset context loaded. What would you like to know?' },
+    ...priorMessages,
+    { role: 'user',      content: question },
+  ]
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -36,7 +48,7 @@ export default async function handler(req) {
       model: 'claude-sonnet-4-6',
       max_tokens: 768,
       system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
+      messages,
     }),
   })
 

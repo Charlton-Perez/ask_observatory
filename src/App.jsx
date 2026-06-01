@@ -68,7 +68,7 @@ export default function App() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, token }),
+        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, history: messages, token }),
       })
       if (!res.ok) throw new Error(await res.text())
       const { answer } = await res.json()
