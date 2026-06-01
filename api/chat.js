@@ -24,11 +24,15 @@ export default async function handler(req) {
   if (calendarSlices && Object.keys(calendarSlices).length > 0)
     dataContext.push(`All historical records for the calendar day(s) mentioned (sorted by Tx descending):\n${JSON.stringify(calendarSlices)}`)
 
-  // Build the full message list: context preamble + prior turns + current question
-  const priorMessages = (history || []).map(m => ({
-    role: m.role === 'user' ? 'user' : 'assistant',
-    content: m.text,
-  }))
+  // Build the full message list: context preamble + prior turns + current question.
+  // Cap history at the last 20 messages (10 exchanges) to keep costs predictable.
+  const recentHistory = (history || []).slice(-20)
+
+  // Anthropic requires strict user/assistant alternation.
+  // Map roles and filter out any consecutive duplicates that could break alternation.
+  const priorMessages = recentHistory
+    .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }))
+    .filter((m, i, arr) => i === 0 || m.role !== arr[i - 1].role)
 
   const messages = [
     { role: 'user',      content: dataContext.join('\n\n') },
@@ -46,13 +50,17 @@ export default async function handler(req) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 768,
+      max_tokens: 2048,
       system: SYSTEM_PROMPT,
       messages,
     }),
   })
 
-  if (!response.ok) return new Response(`API error: ${await response.text()}`, { status: 502 })
+  if (!response.ok) {
+    const errText = await response.text()
+    console.error('Anthropic API error:', errText)
+    return new Response(`API error: ${errText}`, { status: 502 })
+  }
 
   const data = await response.json()
   return new Response(
