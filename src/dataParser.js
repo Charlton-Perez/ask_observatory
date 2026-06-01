@@ -224,25 +224,46 @@ export function buildContext(rows) {
     return out
   })
 
-  // Annual summary
-  const byYear = Object.entries(annual).sort(([a], [b]) => a - b).map(([year, fields]) => {
-    const out = { year: parseInt(year) }
+  // Decade summary — far more compact than per-year and still answers trend questions.
+  // Groups years into decades (1900s, 1910s, …) and averages across them.
+  const decadeMap = {}
+  for (const [year, fields] of Object.entries(annual)) {
+    const decade = Math.floor(parseInt(year) / 10) * 10
+    if (!decadeMap[decade]) decadeMap[decade] = Object.fromEntries(FIELDS.map(f => [f.key, []]))
+    for (const { key: f } of FIELDS) {
+      if (f === 'af' || f === 'gf') continue
+      decadeMap[decade][f].push(...fields[f])
+    }
+  }
+  const byDecade = Object.entries(decadeMap).sort(([a], [b]) => a - b).map(([decade, fields]) => {
+    const out = { decade: `${decade}s` }
     for (const { key: f } of FIELDS) {
       if (f === 'af' || f === 'gf') continue
       const arr = fields[f]
-      if (f === 'RR' || f === 'sss') out[f] = total(arr)      // totals make more sense annually
+      if (f === 'RR' || f === 'sss') out[f] = mean(arr)   // mean annual total across decade
       else out[`${f}_mean`] = mean(arr)
     }
-    out.Tx_max = max(annual[year].Tx)
-    out.Tn_min = min(annual[year].Tn)
+    out.Tx_max = max(fields.Tx)
+    out.Tn_min = min(fields.Tn)
     return out
   })
+
+  // Keep per-year just for Tx_max and Tn_min — useful for "warmest year" questions
+  // but much smaller than the full annual breakdown.
+  const byYear = Object.entries(annual).sort(([a], [b]) => a - b).map(([year, fields]) => ({
+    year: parseInt(year),
+    Tx_max: max(fields.Tx),
+    Tn_min: min(fields.Tn),
+    RR_total: total(fields.RR),
+    sss_total: total(fields.sss),
+  }))
 
   return {
     overview: { startDate, endDate, totalDays },
     allTimeExtremes: extremes,
     longestRuns: computeRuns(rows),
     byMonth,
+    byDecade,
     byYear,
   }
 }
