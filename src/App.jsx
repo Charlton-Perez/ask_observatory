@@ -1,45 +1,46 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { parseCSV, buildSummary, buildDayIndex, buildCalendarDayIndex, extractDateReferences, detectFields, getDayRows, getCalendarSlices } from './dataParser'
+import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, extractDates } from './dataParser'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
 
 const EXAMPLE_QUESTIONS = [
-  'What is the hottest temperature ever recorded in October?',
-  'Where would a temperature of 30°C rank among all-time 2nd Junes?',
+  'What is the hottest temperature ever recorded?',
+  'What was the wettest day on record?',
+  'Which year had the most sunshine?',
   'What was the weather like on 14 October 1987?',
-  'Which year had the warmest summer on record?',
-  'What is the average January pressure, and how does it vary year to year?',
+  'Which month tends to be the driest?',
+  'How many air frost days does January typically have?',
 ]
 
 function checkAccess() {
-  const params = new URLSearchParams(window.location.search)
-  return params.get('token') === INVITE_TOKEN
+  return new URLSearchParams(window.location.search).get('token') === INVITE_TOKEN
 }
 
 export default function App() {
   const [hasAccess] = useState(checkAccess)
-  const [summary, setSummary] = useState(null)
-  const [dayIndex, setDayIndex] = useState(null)
-  const [calendarIndex, setCalendarIndex] = useState(null)
+  const [context, setContext]         = useState(null)  // sent with every query
+  const [dayIndex, setDayIndex]       = useState(null)  // "YYYY-MM-DD" lookups
+  const [calIndex, setCalIndex]       = useState(null)  // "MM-DD" all-years lookups
   const [loadError, setLoadError] = useState(null)
   const [messages, setMessages] = useState([])
   const [question, setQuestion] = useState('')
-  const [asking, setAsking] = useState(false)
+  const [asking, setAsking]     = useState(false)
   const bottomRef = useRef(null)
   const token = new URLSearchParams(window.location.search).get('token')
 
+  // Load and parse the dataset once on mount
   useEffect(() => {
     if (!hasAccess) return
     fetch('/ruao_data.csv')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text() })
       .then(text => {
         const rows = parseCSV(text)
-        setSummary(buildSummary(rows))
+        setContext(buildContext(rows))
         setDayIndex(buildDayIndex(rows))
-        setCalendarIndex(buildCalendarDayIndex(rows))
+        setCalIndex(buildCalendarDayIndex(rows))
       })
       .catch(e => setLoadError('Could not load dataset: ' + e.message))
   }, [hasAccess])
@@ -50,22 +51,24 @@ export default function App() {
 
   const askQuestion = async (q) => {
     const text = (q || question).trim()
-    if (!text || !summary || asking) return
+    if (!text || !context || asking) return
     setQuestion('')
     setMessages(prev => [...prev, { role: 'user', text }])
     setAsking(true)
     try {
-      const { specificDates, calendarDays } = extractDateReferences(text)
-      const fields = detectFields(text)
-
-      // Only send the fields the question is actually about
-      const dailyRows = getDayRows(dayIndex, specificDates, fields)
-      const calendarSlices = getCalendarSlices(calendarIndex, calendarDays, fields)
+      const { specificDates, calendarDays } = extractDates(text)
+      // Specific dates: e.g. "14 October 1987" → one row
+      const dailyRows = specificDates.map(d => dayIndex[d]).filter(Boolean)
+      // Calendar days: e.g. "3rd January" → all ~118 Jan 3rd records across all years
+      const calendarSlices = calendarDays.reduce((acc, key) => {
+        if (calIndex[key]) acc[key] = calIndex[key]
+        return acc
+      }, {})
 
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, summary, dailyRows, calendarSlices, token }),
+        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, token }),
       })
       if (!res.ok) throw new Error(await res.text())
       const { answer } = await res.json()
@@ -104,19 +107,19 @@ export default function App() {
       </header>
 
       <main className={styles.main}>
-        {!summary && !loadError && (
+        {!context && !loadError && (
           <div className={styles.loading}><p>Loading observatory data&hellip;</p></div>
         )}
         {loadError && (
           <div className={styles.loading}><p className={styles.error}>{loadError}</p></div>
         )}
 
-        {summary && (
+        {context && (
           <>
             <div className={styles.dataCard}>
               <span className={styles.dataTag}>Dataset loaded</span>
               <span className={styles.dataInfo}>
-                {summary.overview.totalDays.toLocaleString()} daily records &mdash; {summary.overview.startDate} to {summary.overview.endDate}
+                {context.overview.totalDays.toLocaleString()} daily records &mdash; {context.overview.startDate} to {context.overview.endDate}
               </span>
             </div>
 

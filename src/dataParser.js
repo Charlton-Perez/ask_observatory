@@ -1,294 +1,301 @@
 import Papa from 'papaparse'
 
-const MONTH_NAMES = [
-  'January','February','March','April','May','June',
-  'July','August','September','October','November','December'
+// ── Column definitions ────────────────────────────────────────────────────────
+// Each entry describes a numeric field in the CSV.
+// label: human-readable name used in the summary sent to Claude.
+// higher: true = higher values are "more extreme" (used for top-20 ranking direction).
+export const FIELDS = [
+  { key: 'Tx',    label: 'Daily max temp (°C)',         higher: true  },
+  { key: 'Tn',    label: 'Daily min temp (°C)',          higher: false },
+  { key: 'Tdry',  label: '09 UTC dry-bulb temp (°C)',   higher: null  }, // no natural extreme direction
+  { key: 'Twet',  label: 'Wet-bulb temp (°C)',          higher: null  },
+  { key: 'Pmsl',  label: 'Mean sea level pressure (hPa)', higher: true },
+  { key: 'RH',    label: 'Relative humidity (%)',        higher: null  },
+  { key: 'RR',    label: 'Rainfall (mm)',                higher: true  },
+  { key: 'sss',   label: 'Sunshine duration (hrs)',      higher: true  },
+  { key: 'sd_cm', label: 'Snow depth (cm)',              higher: true  },
+  { key: 'af',    label: 'Air frost (1=yes)',            higher: null  },
+  { key: 'gf',    label: 'Ground frost (1=yes)',         higher: null  },
 ]
 
-export const MONTH_MAP = {
-  january:1, february:2, march:3, april:4, may:5, june:6,
-  july:7, august:8, september:9, october:10, november:11, december:12,
-  jan:1, feb:2, mar:3, apr:4, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12,
-}
+const MONTH_NAMES = [
+  'January','February','March','April','May','June',
+  'July','August','September','October','November','December',
+]
 
 function num(v) {
   const n = parseFloat(v)
   return isNaN(n) ? null : n
 }
 
-function dateStr(year, month, day) {
-  return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
-}
+function pad(n) { return String(n).padStart(2, '0') }
+function dateFmt(year, month, day) { return `${year}-${pad(month)}-${pad(day)}` }
 
+// ── Parse ─────────────────────────────────────────────────────────────────────
 export function parseCSV(text) {
-  const result = Papa.parse(text, {
+  const { data } = Papa.parse(text, {
     header: true,
     skipEmptyLines: true,
     transformHeader: h => h.trim(),
   })
-  return result.data
+  return data
 }
 
-// "YYYY-MM-DD" → full row object (all fields; sliced at query time)
+// ── Day index: "YYYY-MM-DD" → row (for specific date lookups) ────────────────
 export function buildDayIndex(rows) {
   const index = {}
   for (const row of rows) {
     const year = parseInt(row.year), month = parseInt(row.month), day = parseInt(row.day)
     if (!year || !month || !day) continue
-    const key = dateStr(year, month, day)
-    // Store all known numeric fields so new ones are picked up automatically
+    const key = dateFmt(year, month, day)
     const entry = { date: key }
-    for (const f of ALL_FIELDS) entry[f] = num(row[f])
+    for (const { key: f } of FIELDS) entry[f] = num(row[f])
     index[key] = entry
   }
   return index
 }
 
-// "MM-DD" → array of { year, ...allFields } sorted by Tx desc
+// ── Calendar-day index: "MM-DD" → all historical records for that date ────────
+// Used for questions like "warmest 3rd January", "wettest 25th December" etc.
+// Each entry is an array of { year, ...fields } sorted by Tx descending.
 export function buildCalendarDayIndex(rows) {
   const index = {}
   for (const row of rows) {
     const year = parseInt(row.year), month = parseInt(row.month), day = parseInt(row.day)
     if (!year || !month || !day) continue
-    const key = `${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`
+    const key = `${pad(month)}-${pad(day)}`
     if (!index[key]) index[key] = []
     const entry = { year }
-    for (const f of ALL_FIELDS) entry[f] = num(row[f])
+    for (const { key: f } of FIELDS) entry[f] = num(row[f])
     index[key].push(entry)
   }
+  // Pre-sort by Tx descending so Claude can read off rankings directly
   for (const key of Object.keys(index)) {
     index[key].sort((a, b) => (b.Tx ?? -999) - (a.Tx ?? -999))
   }
   return index
 }
 
-// Query helpers — call these at question time with the detected field list
-export function getDayRows(dayIndex, dates, fields) {
-  return dates.map(d => dayIndex[d]).filter(Boolean).map(r => pickFields(r, fields))
+// ── Run/spell computation ─────────────────────────────────────────────────────
+// Conditions to pre-compute. label is sent to Claude; test(row) returns bool.
+// Add new conditions here as needed — nothing else changes.
+const RUN_CONDITIONS = [
+  { label: 'days with Tx >= 25°C (warm days)',      test: r => r.Tx != null && r.Tx >= 25 },
+  { label: 'days with Tx >= 30°C (hot days)',       test: r => r.Tx != null && r.Tx >= 30 },
+  { label: 'days with Tx >= 20°C',                  test: r => r.Tx != null && r.Tx >= 20 },
+  { label: 'days with Tx < 5°C (cold days)',        test: r => r.Tx != null && r.Tx < 5  },
+  { label: 'days with Tx < 0°C (ice days)',         test: r => r.Tx != null && r.Tx < 0  },
+  { label: 'nights with Tn < 0°C (air frost)',      test: r => r.Tn != null && r.Tn < 0  },
+  { label: 'dry days (RR = 0 mm)',                  test: r => r.RR != null && r.RR === 0 },
+  { label: 'wet days (RR > 1 mm)',                  test: r => r.RR != null && r.RR > 1  },
+  { label: 'days with any sunshine (sss > 0 hrs)', test: r => r.sss != null && r.sss > 0 },
+  { label: 'days with no sunshine (sss = 0 hrs)',  test: r => r.sss != null && r.sss === 0 },
+  { label: 'days with snow on ground (sd_cm > 0)', test: r => r.sd_cm != null && r.sd_cm > 0 },
+]
+
+// Compute the top-10 longest consecutive runs for each condition.
+// Returns an object keyed by condition label.
+function computeRuns(rows, n = 10) {
+  // Sort rows chronologically (they usually are, but be safe)
+  const sorted = [...rows]
+    .map(r => ({ ...r, year: parseInt(r.year), month: parseInt(r.month), day: parseInt(r.day) }))
+    .filter(r => r.year && r.month && r.day)
+    .sort((a, b) => dateFmt(a.year, a.month, a.day).localeCompare(dateFmt(b.year, b.month, b.day)))
+
+  const results = {}
+
+  for (const { label, test } of RUN_CONDITIONS) {
+    const topRuns = []
+    let runStart = null, runLen = 0
+
+    const closeRun = (endDate) => {
+      if (runLen > 0) {
+        topRuns.push({ start: runStart, end: endDate, days: runLen })
+        topRuns.sort((a, b) => b.days - a.days)
+        if (topRuns.length > n) topRuns.pop()
+      }
+    }
+
+    for (const row of sorted) {
+      const date = dateFmt(row.year, row.month, row.day)
+      const numeric = {}
+      for (const { key: f } of FIELDS) numeric[f] = num(row[f])
+
+      if (test(numeric)) {
+        if (runLen === 0) runStart = date
+        runLen++
+      } else {
+        const prevDate = sorted[sorted.indexOf(row) - 1]
+        closeRun(prevDate ? dateFmt(prevDate.year, prevDate.month, prevDate.day) : date)
+        runStart = null
+        runLen = 0
+      }
+    }
+    // Close any open run at end of data
+    const last = sorted[sorted.length - 1]
+    closeRun(dateFmt(last.year, last.month, last.day))
+
+    results[label] = topRuns
+  }
+
+  return results
 }
 
-export function getCalendarSlices(calendarIndex, calendarDays, fields) {
-  return calendarDays.reduce((acc, key) => {
-    if (calendarIndex[key]) acc[key] = calendarIndex[key].map(r => pickFields(r, fields))
-    return acc
-  }, {})
+// ── Main context: everything Claude needs, built once ─────────────────────────
+export function buildContext(rows) {
+  // Monthly accumulators
+  const monthly = Array.from({ length: 12 }, (_, i) => ({
+    month: i + 1, name: MONTH_NAMES[i],
+    values: Object.fromEntries(FIELDS.map(f => [f.key, []])),
+    frostDays: { af: 0, gf: 0 },
+    n: 0,
+  }))
+
+  // Annual accumulators
+  const annual = {}
+
+  // All-day lists for ranking (only fields with a clear extreme direction)
+  const rankable = FIELDS.filter(f => f.higher !== null)
+  const allDays = Object.fromEntries(rankable.map(f => [f.key, []]))
+
+  let startDate = null, endDate = null, totalDays = 0
+
+  for (const row of rows) {
+    const year = parseInt(row.year), month = parseInt(row.month), day = parseInt(row.day)
+    if (!year || !month || !day) continue
+    totalDays++
+    const d = dateFmt(year, month, day)
+    if (!startDate || d < startDate) startDate = d
+    if (!endDate   || d > endDate)   endDate   = d
+
+    const m = monthly[month - 1]
+    m.n++
+
+    for (const { key: f } of FIELDS) {
+      const v = num(row[f])
+      if (v !== null) {
+        if (f === 'af' || f === 'gf') { if (v === 1) m.frostDays[f]++ }
+        else m.values[f].push(v)
+      }
+    }
+
+    // Annual
+    if (!annual[year]) annual[year] = Object.fromEntries(FIELDS.map(f => [f.key, []]))
+    for (const { key: f } of FIELDS) {
+      const v = num(row[f])
+      if (v !== null && f !== 'af' && f !== 'gf') annual[year][f].push(v)
+    }
+
+    // Rankable all-day lists
+    for (const { key: f } of rankable) {
+      const v = num(row[f])
+      if (v !== null) allDays[f].push({ date: d, value: v })
+    }
+  }
+
+  const mean  = arr => arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2) : null
+  const max   = arr => arr.length ? Math.max(...arr) : null
+  const min   = arr => arr.length ? Math.min(...arr) : null
+  const total = arr => arr.length ? +(arr.reduce((a, b) => a + b, 0)).toFixed(1) : null
+  const top   = (arr, n = 20) => [...arr].sort((a, b) => b.value - a.value).slice(0, n)
+  const bot   = (arr, n = 20) => [...arr].sort((a, b) => a.value - b.value).slice(0, n)
+
+  // All-time extremes with top/bottom 20 ranked lists
+  const extremes = {}
+  for (const { key: f, higher } of rankable) {
+    extremes[f] = higher
+      ? { top20: top(allDays[f]) }
+      : { bottom20: bot(allDays[f]) }
+    // Pressure gets both directions
+    if (f === 'Pmsl') extremes[f] = { top20: top(allDays[f]), bottom20: bot(allDays[f]) }
+  }
+
+  // Monthly summary
+  const byMonth = monthly.map(m => {
+    const out = { month: m.month, name: m.name, daysInRecord: m.n }
+    for (const { key: f } of FIELDS) {
+      if (f === 'af' || f === 'gf') {
+        out[`${f}_days`] = m.frostDays[f]
+      } else {
+        const arr = m.values[f]
+        out[f] = { mean: mean(arr), max: max(arr), min: min(arr) }
+      }
+    }
+    return out
+  })
+
+  // Annual summary
+  const byYear = Object.entries(annual).sort(([a], [b]) => a - b).map(([year, fields]) => {
+    const out = { year: parseInt(year) }
+    for (const { key: f } of FIELDS) {
+      if (f === 'af' || f === 'gf') continue
+      const arr = fields[f]
+      if (f === 'RR' || f === 'sss') out[f] = total(arr)      // totals make more sense annually
+      else out[`${f}_mean`] = mean(arr)
+    }
+    out.Tx_max = max(annual[year].Tx)
+    out.Tn_min = min(annual[year].Tn)
+    return out
+  })
+
+  return {
+    overview: { startDate, endDate, totalDays },
+    allTimeExtremes: extremes,
+    longestRuns: computeRuns(rows),
+    byMonth,
+    byYear,
+  }
 }
 
-// ── Field detection ───────────────────────────────────────────────────────────
-// Maps each data field to the keywords that imply it's relevant.
-// To add a new field: add it here and to ALL_FIELDS below. Nothing else changes.
-const FIELD_KEYWORDS = {
-  // Temperature
-  Tx:     ['temperature', 'temp', 'hot', 'warm', 'heat', 'max', 'maximum', 'highest', 'degrees', '°c', 'summer', 'heatwave', 'rank', 'ranking'],
-  Tn:     ['temperature', 'temp', 'cold', 'cool', 'freeze', 'frost', 'min', 'minimum', 'lowest', 'degrees', '°c', 'winter', 'rank', 'ranking'],
-  Tdry:   ['dry bulb', 'drybulb', 'observation temp', '09 utc', 'morning temp'],
-  Twet:   ['wet bulb', 'wetbulb', 'wet-bulb', 'dew point', 'apparent temperature'],
-  // Pressure
-  Pmsl:   ['pressure', 'hpa', 'millibar', 'mbar', 'anticyclone', 'depression', 'cyclone', 'isobar', 'high pressure', 'low pressure', 'barometric'],
-  // Humidity
-  RH:     ['humidity', 'humid', 'damp', 'muggy', 'relative humidity', 'moisture'],
-  // Wind
-  ff_mph: ['wind', 'windy', 'gust', 'speed', 'mph', 'breeze', 'gale', 'storm', 'breezy'],
-  dd_pt:  ['wind', 'direction', 'westerly', 'easterly', 'northerly', 'southerly', 'from the'],
-  // Cloud & weather
-  N10:    ['cloud', 'cloudy', 'overcast', 'clear', 'sunshine', 'sky', 'cover'],
-  ww:     ['weather code', 'present weather', 'synoptic', 'ww'],
-  // Precipitation
-  RR:     ['rain', 'rainfall', 'precipitation', 'wet', 'flood', 'downpour', 'shower', 'mm'],
-  rd:     ['rain day', 'rain fell', 'did it rain', 'rainy'],
-  // Frost & snow
-  af:     ['air frost', 'frost', 'freeze', 'freezing', 'frozen', 'icy'],
-  gf:     ['ground frost', 'frost', 'freeze', 'frozen', 'icy'],
-  tx0:    ['below zero', 'freezing', 'ice day', 'tx0'],
-  sd_cm:  ['snow', 'snowy', 'snowfall', 'snow depth', 'blizzard', 'sleet', 'cm'],
-  // Sunshine
-  sss:    ['sunshine', 'sunny', 'sun hours', 'bright', 'solar', 'daylight', 'cloudy', 'overcast'],
+// ── Date extraction from question text ───────────────────────────────────────
+const MONTH_MAP = {
+  january:1, february:2, march:3, april:4, may:5, june:6,
+  july:7, august:8, september:9, october:10, november:11, december:12,
+  jan:1, feb:2, mar:3, apr:4, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12,
 }
-
-// ALL_FIELDS is the authoritative list — must match CSV column headers exactly.
-export const ALL_FIELDS = Object.keys(FIELD_KEYWORDS)
-
-// Given a question string, return the subset of fields that are relevant.
-// Falls back to ALL_FIELDS if nothing specific is detected.
-export function detectFields(question) {
-  const q = question.toLowerCase()
-  const matched = ALL_FIELDS.filter(field =>
-    FIELD_KEYWORDS[field].some(kw => q.includes(kw))
-  )
-  return matched.length > 0 ? matched : ALL_FIELDS
-}
-
-// Slice a row object down to only the requested fields (always keep year/date).
-function pickFields(row, fields) {
-  const out = {}
-  if (row.date) out.date = row.date
-  if (row.year) out.year = row.year
-  for (const f of fields) if (f in row) out[f] = row[f]
-  return out
-}
-
-// ── Date / calendar-day extraction from free text ────────────────────────────
 
 // Returns { specificDates: ["YYYY-MM-DD",...], calendarDays: ["MM-DD",...] }
-export function extractDateReferences(question) {
-  const specificDates = new Set()
+export function extractDates(question) {
+  const dates = new Set()
   const calendarDays = new Set()
 
-  // Specific full dates ─────────────────────────────────────────────────────
   // ISO: 1987-10-14
   for (const m of question.matchAll(/\b(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})\b/g))
-    specificDates.add(`${m[1]}-${m[2].padStart(2,'0')}-${m[3].padStart(2,'0')}`)
+    dates.add(`${m[1]}-${pad(m[2])}-${pad(m[3])}`)
 
-  // DMY: 14/10/1987 or 14-10-1987
+  // DMY: 14/10/1987
   for (const m of question.matchAll(/\b(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})\b/g))
-    specificDates.add(`${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`)
+    dates.add(`${m[3]}-${pad(m[2])}-${pad(m[1])}`)
 
   // "14 October 1987" / "14th October 1987"
   for (const m of question.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{4})\b/gi)) {
     const mo = MONTH_MAP[m[2].toLowerCase()]
-    if (mo) specificDates.add(`${m[3]}-${String(mo).padStart(2,'0')}-${m[1].padStart(2,'0')}`)
+    if (mo) dates.add(`${m[3]}-${pad(mo)}-${pad(m[1])}`)
   }
 
   // "October 14 1987" / "October 14th, 1987"
   for (const m of question.matchAll(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?\s*,?\s*(\d{4})\b/gi)) {
     const mo = MONTH_MAP[m[1].toLowerCase()]
-    if (mo) specificDates.add(`${m[3]}-${String(mo).padStart(2,'0')}-${m[2].padStart(2,'0')}`)
+    if (mo) dates.add(`${m[3]}-${pad(mo)}-${pad(m[2])}`)
   }
 
-  // Calendar day only (no year) ─────────────────────────────────────────────
-  // "2nd June", "June 2", "June 2nd", "2 June" — without a year following
+  // Calendar day without year: "3rd January", "January 3rd", "3 January" etc.
+  // Only add as a calendar day if it wasn't already captured as a full specific date
+  const fullDateStrings = [...dates]
   for (const m of question.matchAll(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/gi)) {
-    if (!question.match(new RegExp(m[0] + '\\s+\\d{4}'))) { // skip if already matched as full date
-      const mo = MONTH_MAP[m[2].toLowerCase()]
-      if (mo) calendarDays.add(`${String(mo).padStart(2,'0')}-${m[1].padStart(2,'0')}`)
-    }
+    const mo = MONTH_MAP[m[2].toLowerCase()]
+    if (!mo) continue
+    const key = `${pad(mo)}-${pad(m[1])}`
+    if (!fullDateStrings.some(d => d.endsWith(`-${key.replace('-', '-')}`)))
+      calendarDays.add(key)
   }
   for (const m of question.matchAll(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(\d{1,2})(?:st|nd|rd|th)?\b/gi)) {
-    if (!question.match(new RegExp(m[0] + '[,\\s]+\\d{4}'))) {
-      const mo = MONTH_MAP[m[1].toLowerCase()]
-      if (mo) calendarDays.add(`${String(mo).padStart(2,'0')}-${m[2].padStart(2,'0')}`)
-    }
+    const mo = MONTH_MAP[m[1].toLowerCase()]
+    if (!mo) continue
+    const key = `${pad(mo)}-${pad(m[2])}`
+    if (!fullDateStrings.some(d => d.endsWith(`-${pad(m[2])}`)))
+      calendarDays.add(key)
   }
 
-  return { specificDates: [...specificDates], calendarDays: [...calendarDays] }
-}
-
-// ── Summary ──────────────────────────────────────────────────────────────────
-
-export function buildSummary(rows) {
-  const byMonth = Array.from({ length: 12 }, (_, i) => ({
-    month: i + 1, name: MONTH_NAMES[i],
-    recordMax: null, recordMaxDate: null,
-    recordMin: null, recordMinDate: null,
-    txValues: [], tnValues: [], tdryValues: [], twetValues: [],
-    pmslValues: [], rhValues: [], ffValues: [],
-    rrValues: [], sssValues: [], n10Values: [],
-    afDays: 0, gfDays: 0, snowDays: 0,
-  }))
-
-  let allTimeMax = null, allTimeMaxDate = null
-  let allTimeMin = null, allTimeMinDate = null
-  let startDate = null, endDate = null
-  let totalRows = 0, missingRows = 0
-  const byYear = {}
-
-  // Per-day records for all-time ranking (field → array of {date, value})
-  const allDays = { Tx: [], Tn: [], RR: [], ff_mph: [], sss: [], sd_cm: [], Pmsl: [] }
-
-  for (const row of rows) {
-    const year = parseInt(row.year), month = parseInt(row.month), day = parseInt(row.day)
-    if (!year || !month || !day) continue
-    totalRows++
-    const d = dateStr(year, month, day)
-    if (!startDate || d < startDate) startDate = d
-    if (!endDate || d > endDate) endDate = d
-
-    const tx = num(row.Tx), tn = num(row.Tn), tdry = num(row.Tdry), twet = num(row.Twet)
-    const pmsl = num(row.Pmsl), rh = num(row.RH)
-    const ff = num(row.ff_mph), rr = num(row.RR), sss = num(row.sss), sdcm = num(row.sd_cm)
-    const af = num(row.af), gf = num(row.gf), n10 = num(row.N10)
-    if (tx === null && tn === null) missingRows++
-
-    const m = byMonth[month - 1]
-    if (tx !== null) {
-      m.txValues.push(tx)
-      if (m.recordMax === null || tx > m.recordMax) { m.recordMax = tx; m.recordMaxDate = d }
-      if (allTimeMax === null || tx > allTimeMax) { allTimeMax = tx; allTimeMaxDate = d }
-    }
-    if (tn !== null) {
-      m.tnValues.push(tn)
-      if (m.recordMin === null || tn < m.recordMin) { m.recordMin = tn; m.recordMinDate = d }
-      if (allTimeMin === null || tn < allTimeMin) { allTimeMin = tn; allTimeMinDate = d }
-    }
-    if (tdry !== null) m.tdryValues.push(tdry)
-    if (twet !== null) m.twetValues.push(twet)
-    if (pmsl !== null) m.pmslValues.push(pmsl)
-    if (rh   !== null) m.rhValues.push(rh)
-    if (ff   !== null) m.ffValues.push(ff)
-    if (rr   !== null) m.rrValues.push(rr)
-    if (sss  !== null) m.sssValues.push(sss)
-    if (n10  !== null) m.n10Values.push(n10)
-    if (af === 1) m.afDays++
-    if (gf === 1) m.gfDays++
-    if (sdcm !== null && sdcm > 0) m.snowDays++
-
-    // Accumulate for all-time ranking
-    if (tx   !== null) allDays.Tx.push({ date: d, value: tx })
-    if (tn   !== null) allDays.Tn.push({ date: d, value: tn })
-    if (rr   !== null) allDays.RR.push({ date: d, value: rr })
-    if (ff   !== null) allDays.ff_mph.push({ date: d, value: ff })
-    if (sss  !== null) allDays.sss.push({ date: d, value: sss })
-    if (sdcm !== null) allDays.sd_cm.push({ date: d, value: sdcm })
-    if (pmsl !== null) allDays.Pmsl.push({ date: d, value: pmsl })
-
-    if (!byYear[year]) byYear[year] = { txValues: [], tnValues: [], pmslValues: [], rrValues: [], sssValues: [] }
-    if (tx   !== null) byYear[year].txValues.push(tx)
-    if (tn   !== null) byYear[year].tnValues.push(tn)
-    if (pmsl !== null) byYear[year].pmslValues.push(pmsl)
-    if (rr   !== null) byYear[year].rrValues.push(rr)
-    if (sss  !== null) byYear[year].sssValues.push(sss)
-  }
-
-  const mean = arr => arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2) : null
-  const sum  = arr => arr.length ? +(arr.reduce((a, b) => a + b, 0)).toFixed(1) : null
-  const top  = (arr, n = 10) => [...arr].sort((a, b) => b.value - a.value).slice(0, n)
-  const bot  = (arr, n = 10) => [...arr].sort((a, b) => a.value - b.value).slice(0, n)
-
-  return {
-    overview: { startDate, endDate, totalDays: totalRows, daysWithMissingTemps: missingRows },
-    allTime: {
-      recordMax: allTimeMax, recordMaxDate: allTimeMaxDate,
-      recordMin: allTimeMin, recordMinDate: allTimeMinDate,
-      // Top/bottom 10 for each rankable field — covers "wettest day", "windiest day" etc.
-      hottestDays:    top(allDays.Tx),
-      coldestDays:    bot(allDays.Tn),
-      wettestDays:    top(allDays.RR),
-      windiestDays:   top(allDays.ff_mph),
-      sunniestDays:   top(allDays.sss),
-      deepestSnow:    top(allDays.sd_cm),
-      highestPressure: top(allDays.Pmsl),
-      lowestPressure:  bot(allDays.Pmsl),
-    },
-    byMonth: byMonth.map(m => ({
-      month: m.month, name: m.name,
-      recordMax: m.recordMax, recordMaxDate: m.recordMaxDate,
-      recordMin: m.recordMin, recordMinDate: m.recordMinDate,
-      meanDailyMax: mean(m.txValues), meanDailyMin: mean(m.tnValues),
-      meanTemp: mean(m.tdryValues), meanWetBulb: mean(m.twetValues),
-      meanPressure: mean(m.pmslValues), meanRH: mean(m.rhValues),
-      meanWindMph: mean(m.ffValues),
-      meanRainfallMm: mean(m.rrValues), meanSunshinHrs: mean(m.sssValues),
-      meanCloudCover: mean(m.n10Values),
-      meanAirFrostDays: m.afDays, meanGroundFrostDays: m.gfDays, meanSnowDays: m.snowDays,
-      n: m.txValues.length,
-    })),
-    byYear: Object.entries(byYear).sort(([a],[b]) => a-b).map(([year, d]) => ({
-      year: parseInt(year),
-      meanMax: mean(d.txValues), meanMin: mean(d.tnValues),
-      annualMax: d.txValues.length ? +Math.max(...d.txValues).toFixed(1) : null,
-      annualMin: d.tnValues.length ? +Math.min(...d.tnValues).toFixed(1) : null,
-      totalRainfallMm: sum(d.rrValues),
-      totalSunshineHrs: sum(d.sssValues),
-    })),
-  }
+  return { specificDates: [...dates], calendarDays: [...calendarDays] }
 }
