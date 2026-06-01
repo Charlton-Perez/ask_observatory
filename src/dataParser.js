@@ -192,6 +192,9 @@ export function buildSummary(rows) {
   let totalRows = 0, missingRows = 0
   const byYear = {}
 
+  // Per-day records for all-time ranking (field → array of {date, value})
+  const allDays = { Tx: [], Tn: [], RR: [], ff_mph: [], sss: [], sd_cm: [], Pmsl: [] }
+
   for (const row of rows) {
     const year = parseInt(row.year), month = parseInt(row.month), day = parseInt(row.day)
     if (!year || !month || !day) continue
@@ -229,6 +232,15 @@ export function buildSummary(rows) {
     if (gf === 1) m.gfDays++
     if (sdcm !== null && sdcm > 0) m.snowDays++
 
+    // Accumulate for all-time ranking
+    if (tx   !== null) allDays.Tx.push({ date: d, value: tx })
+    if (tn   !== null) allDays.Tn.push({ date: d, value: tn })
+    if (rr   !== null) allDays.RR.push({ date: d, value: rr })
+    if (ff   !== null) allDays.ff_mph.push({ date: d, value: ff })
+    if (sss  !== null) allDays.sss.push({ date: d, value: sss })
+    if (sdcm !== null) allDays.sd_cm.push({ date: d, value: sdcm })
+    if (pmsl !== null) allDays.Pmsl.push({ date: d, value: pmsl })
+
     if (!byYear[year]) byYear[year] = { txValues: [], tnValues: [], pmslValues: [], rrValues: [], sssValues: [] }
     if (tx   !== null) byYear[year].txValues.push(tx)
     if (tn   !== null) byYear[year].tnValues.push(tn)
@@ -239,10 +251,24 @@ export function buildSummary(rows) {
 
   const mean = arr => arr.length ? +(arr.reduce((a, b) => a + b, 0) / arr.length).toFixed(2) : null
   const sum  = arr => arr.length ? +(arr.reduce((a, b) => a + b, 0)).toFixed(1) : null
+  const top  = (arr, n = 10) => [...arr].sort((a, b) => b.value - a.value).slice(0, n)
+  const bot  = (arr, n = 10) => [...arr].sort((a, b) => a.value - b.value).slice(0, n)
 
   return {
     overview: { startDate, endDate, totalDays: totalRows, daysWithMissingTemps: missingRows },
-    allTime: { recordMax: allTimeMax, recordMaxDate: allTimeMaxDate, recordMin: allTimeMin, recordMinDate: allTimeMinDate },
+    allTime: {
+      recordMax: allTimeMax, recordMaxDate: allTimeMaxDate,
+      recordMin: allTimeMin, recordMinDate: allTimeMinDate,
+      // Top/bottom 10 for each rankable field — covers "wettest day", "windiest day" etc.
+      hottestDays:    top(allDays.Tx),
+      coldestDays:    bot(allDays.Tn),
+      wettestDays:    top(allDays.RR),
+      windiestDays:   top(allDays.ff_mph),
+      sunniestDays:   top(allDays.sss),
+      deepestSnow:    top(allDays.sd_cm),
+      highestPressure: top(allDays.Pmsl),
+      lowestPressure:  bot(allDays.Pmsl),
+    },
     byMonth: byMonth.map(m => ({
       month: m.month, name: m.name,
       recordMax: m.recordMax, recordMaxDate: m.recordMaxDate,
