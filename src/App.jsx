@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { parseCSV, buildSummary } from './dataParser'
+import { parseCSV, buildSummary, buildIndex, extractDates } from './dataParser'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
@@ -20,6 +20,7 @@ function checkAccess() {
 export default function App() {
   const [hasAccess] = useState(checkAccess)
   const [summary, setSummary] = useState(null)
+  const [dayIndex, setDayIndex] = useState(null)
   const [loadError, setLoadError] = useState(null)
   const [messages, setMessages] = useState([])
   const [question, setQuestion] = useState('')
@@ -31,7 +32,11 @@ export default function App() {
     if (!hasAccess) return
     fetch('/ruao_data.csv')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text() })
-      .then(text => setSummary(buildSummary(parseCSV(text))))
+      .then(text => {
+        const rows = parseCSV(text)
+        setSummary(buildSummary(rows))
+        setDayIndex(buildIndex(rows))
+      })
       .catch(e => setLoadError('Could not load dataset: ' + e.message))
   }, [hasAccess])
 
@@ -46,10 +51,12 @@ export default function App() {
     setMessages(prev => [...prev, { role: 'user', text }])
     setAsking(true)
     try {
+      const dates = extractDates(text)
+      const dailyRows = dates.map(d => dayIndex[d]).filter(Boolean)
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, summary, token }),
+        body: JSON.stringify({ question: text, summary, dailyRows, token }),
       })
       if (!res.ok) throw new Error(await res.text())
       const { answer } = await res.json()

@@ -1,19 +1,19 @@
 export const config = { runtime: 'edge' }
 
-const SYSTEM_PROMPT = `You are an expert meteorologist and climate scientist helping users explore the Reading University Atmospheric Observatory (RUAO) historical weather dataset. The observatory is located in Reading, UK (51.4°N, 0.9°W, ~66m elevation) and has one of the longest continuous instrumental weather records in the world, dating back to 1908.
+const SYSTEM_PROMPT = `You are the Reading University Atmospheric Observatory assistant. Answer questions about the observatory's weather records concisely and directly. The observatory is in Reading, UK (51.4°N, 0.9°W).
 
-You will be given a JSON summary of the dataset, followed by a user question. Use ONLY the data provided to answer factual questions — do not invent values. When giving records, always include the date. Give answers in a friendly but scientifically accurate tone, adding brief meteorological context where helpful (e.g. what synoptic pattern typically produces such extremes, how the value compares to UK averages, etc.).
+You will receive a statistical summary of the dataset and, where relevant, specific daily records. Report values as given — do not invent data. Always include dates when citing records. Keep answers short: one or two paragraphs at most. Focus on the weather at Reading; skip general meteorological theory unless it directly explains something unusual.
 
-All temperatures are in °C. Pressure is in hPa (mean sea level). Relative humidity is in %. Tdry is the dry-bulb temperature at the observation time (typically 09 UTC), Tx is the daily maximum temperature, Tn is the daily minimum temperature.
+Variables: Tx = daily max temp (°C), Tn = daily min temp (°C), Tdry = 09 UTC dry-bulb temp (°C), Pmsl = mean sea level pressure (hPa), RH = relative humidity (%). Missing values are marked x.
 
-If a question cannot be answered from the provided summary, say so clearly and suggest what additional data would be needed.`
+If the data needed to answer a question isn't in what you've been given, say so briefly.`
 
 export default async function handler(req) {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 })
   }
 
-  const { question, summary, token } = await req.json()
+  const { question, summary, dailyRows, token } = await req.json()
 
   if (token !== process.env.INVITE_TOKEN) {
     return new Response('Unauthorized', { status: 401 })
@@ -23,7 +23,11 @@ export default async function handler(req) {
     return new Response('Missing question or summary', { status: 400 })
   }
 
-  const userMessage = `Here is the dataset summary:\n\n${JSON.stringify(summary, null, 2)}\n\nUser question: ${question}`
+  let userMessage = `Dataset summary:\n${JSON.stringify(summary)}`
+  if (dailyRows && dailyRows.length > 0) {
+    userMessage += `\n\nMatched daily records:\n${JSON.stringify(dailyRows)}`
+  }
+  userMessage += `\n\nQuestion: ${question}`
 
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -34,7 +38,7 @@ export default async function handler(req) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
+      max_tokens: 512,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMessage }],
     }),
