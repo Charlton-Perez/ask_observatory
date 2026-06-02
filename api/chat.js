@@ -45,25 +45,40 @@ export default async function handler(req) {
     { role: 'user',      content: question },
   ]
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 2048,
-      system: SYSTEM_PROMPT,
-      messages,
-    }),
+  const body = JSON.stringify({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 2048,
+    system: SYSTEM_PROMPT,
+    messages,
   })
 
-  if (!response.ok) {
+  // Retry up to 3 times on overloaded / 529 errors, with exponential backoff.
+  let response, attempt = 0
+  while (attempt < 3) {
+    response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body,
+    })
+    if (response.ok) break
     const errText = await response.text()
-    console.error('Anthropic API error:', errText)
-    return new Response(`API error: ${errText}`, { status: 502 })
+    const isOverloaded = response.status === 529 ||
+      (response.status === 500 && errText.includes('overloaded'))
+    if (!isOverloaded || attempt === 2) {
+      console.error('Anthropic API error:', errText)
+      const friendly = isOverloaded
+        ? 'The AI service is busy right now — please try again in a moment.'
+        : `API error: ${errText}`
+      return new Response(JSON.stringify({ answer: friendly }), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+    await new Promise(r => setTimeout(r, (attempt + 1) * 1500))
+    attempt++
   }
 
   const data = await response.json()
