@@ -141,8 +141,18 @@ function computeRuns(rows, n = 10) {
   return results
 }
 
+// ── WMO climatological period ────────────────────────────────────────────────
+// Returns the current WMO 30-year normal period based on today's year.
+// Shifts automatically to 2001-2030 once 2031 is reached.
+export function getWMOPeriod() {
+  const year = new Date().getFullYear()
+  if (year < 2031) return { start: 1991, end: 2020, label: '1991–2020' }
+  return { start: 2001, end: 2030, label: '2001–2030' }
+}
+
 // ── Main context: everything Claude needs, built once ─────────────────────────
 export function buildContext(rows) {
+  const wmoPeriod = getWMOPeriod()
   // Monthly accumulators
   const monthly = Array.from({ length: 12 }, (_, i) => ({
     month: i + 1, name: MONTH_NAMES[i],
@@ -156,6 +166,13 @@ export function buildContext(rows) {
 
   // Month-year accumulators: "YYYY-MM" → per-field values (for record month queries)
   const monthYear = {}
+
+  // WMO normals accumulators — one bucket per calendar month, filled only from
+  // rows within the active 30-year period.
+  const normalsRaw = Array.from({ length: 12 }, () => ({
+    Tx: [], Tn: [], Tdry: [], Twet: [], Pmsl: [], RH: [],
+    RR: [], sss: [], af: 0, gf: 0, n: 0,
+  }))
 
   // All-day lists for ranking (only fields with a clear extreme direction)
   const rankable = FIELDS.filter(f => f.higher !== null)
@@ -208,6 +225,16 @@ export function buildContext(rows) {
     for (const { key: f } of rankable) {
       const v = num(row[f])
       if (v !== null) allDays[f].push({ date: d, value: v })
+    }
+
+    // WMO normals — only accumulate rows in the active 30-year period
+    if (year >= wmoPeriod.start && year <= wmoPeriod.end) {
+      const nb = normalsRaw[month - 1]
+      nb.n++
+      const push = (key) => { const v = num(row[key]); if (v !== null) nb[key].push(v) }
+      ;['Tx','Tn','Tdry','Twet','Pmsl','RH','RR','sss'].forEach(push)
+      if (num(row.af) === 1) nb.af++
+      if (num(row.gf) === 1) nb.gf++
     }
   }
 
@@ -356,8 +383,33 @@ export function buildContext(rows) {
     mostAirFrostDaysMonth:allMyEntries.map(([k,v]) => ({ label: v.label, value: v.af })).sort((a,b)=>b.value-a.value)[0],
   }
 
+  // Build WMO normals — monthly means over the active 30-year period.
+  // For RR and sss, the normal is the mean of the 30 annual monthly totals
+  // (i.e. average total per month), not the mean of daily values.
+  const normals = normalsRaw.map((nb, i) => {
+    // For RR and sss, sum per year-month then average those 30 sums.
+    // We already have all daily values in nb.RR / nb.sss; divide by number of
+    // years in the period to get mean monthly total.
+    const yearsInPeriod = wmoPeriod.end - wmoPeriod.start + 1
+    return {
+      month: i + 1,
+      name: MONTH_NAMES[i],
+      meanDailyMax_Tx:   mean(nb.Tx),
+      meanDailyMin_Tn:   mean(nb.Tn),
+      meanTemp_Tdry:     mean(nb.Tdry),
+      meanWetBulb_Twet:  mean(nb.Twet),
+      meanPressure_Pmsl: mean(nb.Pmsl),
+      meanRH:            mean(nb.RH),
+      meanMonthlyRainfall_mm: nb.RR.length ? +(nb.RR.reduce((a,b)=>a+b,0) / yearsInPeriod).toFixed(1) : null,
+      meanMonthlySunshine_hrs: nb.sss.length ? +(nb.sss.reduce((a,b)=>a+b,0) / yearsInPeriod).toFixed(1) : null,
+      meanAirFrostDays:  +(nb.af / yearsInPeriod).toFixed(1),
+      meanGroundFrostDays: +(nb.gf / yearsInPeriod).toFixed(1),
+    }
+  })
+
   return {
     overview: { startDate, endDate, totalDays },
+    wmoNormals: { period: wmoPeriod.label, byMonth: normals },
     allTimeExtremes: extremes,
     recordMonths,
     monthlyTopTens,
