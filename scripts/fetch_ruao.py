@@ -91,7 +91,9 @@ def parse_csv_text(text: str) -> list[dict]:
     reader = csv.DictReader(io.StringIO(text))
     rows = []
     for row in reader:
-        rows.append({k.strip(): (v.strip() if v is not None else "x")
+        # Keep keys as-is (the CSV header has leading spaces on some columns);
+        # strip values only.
+        rows.append({k: (v.strip() if v is not None else "x")
                      for k, v in row.items()})
     return rows
 
