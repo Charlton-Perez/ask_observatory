@@ -87,7 +87,7 @@ async function callGemini({ model, systemPrompt, messages }) {
 //
 // Provider defaults (used when env vars are not set):
 const PROVIDER_DEFAULTS = {
-  anthropic: { baseUrl: 'https://api.anthropic.com',               model: 'claude-3-5-haiku-20241022'  },
+  anthropic: { baseUrl: 'https://api.anthropic.com',               model: 'claude-haiku-4-5-20251001'  },
   openai:    { baseUrl: 'https://api.openai.com',                  model: 'gpt-4o-mini'                },
   groq:      { baseUrl: 'https://api.groq.com/openai',             model: 'llama-3.1-70b-versatile'    },
   mistral:   { baseUrl: 'https://api.mistral.ai',                  model: 'mistral-small-latest'       },
