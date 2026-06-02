@@ -154,6 +154,9 @@ export function buildContext(rows) {
   // Annual accumulators
   const annual = {}
 
+  // Month-year accumulators: "YYYY-MM" → per-field values (for record month queries)
+  const monthYear = {}
+
   // All-day lists for ranking (only fields with a clear extreme direction)
   const rankable = FIELDS.filter(f => f.higher !== null)
   const allDays = Object.fromEntries(rankable.map(f => [f.key, []]))
@@ -184,6 +187,21 @@ export function buildContext(rows) {
     for (const { key: f } of FIELDS) {
       const v = num(row[f])
       if (v !== null && f !== 'af' && f !== 'gf') annual[year][f].push(v)
+    }
+
+    // Month-year (for record month queries)
+    const myKey = `${year}-${pad(month)}`
+    if (!monthYear[myKey]) monthYear[myKey] = {
+      label: `${MONTH_NAMES[month - 1]} ${year}`,
+      values: Object.fromEntries(FIELDS.map(f => [f.key, []])),
+      af: 0, gf: 0,
+    }
+    for (const { key: f } of FIELDS) {
+      const v = num(row[f])
+      if (v === null) continue
+      if (f === 'af') { if (v === 1) monthYear[myKey].af++ }
+      else if (f === 'gf') { if (v === 1) monthYear[myKey].gf++ }
+      else monthYear[myKey].values[f].push(v)
     }
 
     // Rankable all-day lists
@@ -258,9 +276,56 @@ export function buildContext(rows) {
     sss_total: total(fields.sss),
   }))
 
+  // Record months: for each rankable field, which calendar month-year was the extreme?
+  // e.g. hottest month ever, wettest month, most sunshine in a month, etc.
+  const recordMonths = {}
+  const myEntries = Object.entries(monthYear)
+
+  // Highest mean Tx month
+  const hotMonth = myEntries
+    .map(([k, v]) => ({ label: v.label, value: mean(v.values.Tx) }))
+    .filter(e => e.value !== null)
+    .sort((a, b) => b.value - a.value)
+  if (hotMonth.length) recordMonths.hottestMonth = { label: hotMonth[0].label, meanTx: hotMonth[0].value }
+
+  // Lowest mean Tn month
+  const coldMonth = myEntries
+    .map(([k, v]) => ({ label: v.label, value: mean(v.values.Tn) }))
+    .filter(e => e.value !== null)
+    .sort((a, b) => a.value - b.value)
+  if (coldMonth.length) recordMonths.coldestMonth = { label: coldMonth[0].label, meanTn: coldMonth[0].value }
+
+  // Wettest month (total rainfall)
+  const wetMonth = myEntries
+    .map(([k, v]) => ({ label: v.label, value: total(v.values.RR) }))
+    .filter(e => e.value !== null)
+    .sort((a, b) => b.value - a.value)
+  if (wetMonth.length) recordMonths.wettestMonth = { label: wetMonth[0].label, totalRR_mm: wetMonth[0].value }
+
+  // Driest month
+  const dryMonth = myEntries
+    .map(([k, v]) => ({ label: v.label, value: total(v.values.RR) }))
+    .filter(e => e.value !== null && e.value >= 0)
+    .sort((a, b) => a.value - b.value)
+  if (dryMonth.length) recordMonths.driestMonth = { label: dryMonth[0].label, totalRR_mm: dryMonth[0].value }
+
+  // Sunniest month
+  const sunMonth = myEntries
+    .map(([k, v]) => ({ label: v.label, value: total(v.values.sss) }))
+    .filter(e => e.value !== null)
+    .sort((a, b) => b.value - a.value)
+  if (sunMonth.length) recordMonths.sunniestMonth = { label: sunMonth[0].label, totalSunshine_hrs: sunMonth[0].value }
+
+  // Most frost days in a month
+  const frostMonth = myEntries
+    .map(([k, v]) => ({ label: v.label, value: v.af }))
+    .sort((a, b) => b.value - a.value)
+  if (frostMonth.length) recordMonths.mostAirFrostDaysMonth = { label: frostMonth[0].label, days: frostMonth[0].value }
+
   return {
     overview: { startDate, endDate, totalDays },
     allTimeExtremes: extremes,
+    recordMonths,
     longestRuns: computeRuns(rows),
     byMonth,
     byDecade,
@@ -319,4 +384,33 @@ export function extractDates(question) {
   }
 
   return { specificDates: [...dates], calendarDays: [...calendarDays] }
+}
+
+// Detect "last N days / past N days / recent N days / last week / last month" etc.
+// Returns number of days requested, or null if not found.
+export function extractRecentDays(question) {
+  const q = question.toLowerCase()
+
+  // "last/past/recent N days/weeks/months"
+  const m = q.match(/\b(?:last|past|recent|previous)\s+(\d+)\s+(day|days|week|weeks|month|months)\b/)
+  if (m) {
+    const n = parseInt(m[1])
+    if (m[2].startsWith('week'))  return n * 7
+    if (m[2].startsWith('month')) return n * 30
+    return n
+  }
+  // "last week" / "last month" (no number)
+  if (/\blast\s+week\b/.test(q))  return 7
+  if (/\blast\s+month\b/.test(q)) return 30
+  if (/\blast\s+year\b/.test(q))  return 365
+
+  return null
+}
+
+// Given a day index and number of days, return the most recent N daily records.
+export function getRecentRows(dayIndex, nDays) {
+  return Object.values(dayIndex)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .slice(0, nDays)
+    .reverse()  // return in chronological order
 }

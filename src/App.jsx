@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, extractDates } from './dataParser'
+import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, extractDates, extractRecentDays, getRecentRows } from './dataParser'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
@@ -64,11 +64,14 @@ export default function App() {
         if (calIndex[key]) acc[key] = calIndex[key]
         return acc
       }, {})
+      // Recent period: e.g. "last 30 days" → most recent N rows
+      const recentN = extractRecentDays(text)
+      const recentRows = recentN ? getRecentRows(dayIndex, recentN) : []
 
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, history: messages, token }),
+        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, recentRows, history: messages, token }),
       })
       if (!res.ok) throw new Error(await res.text())
       const { answer } = await res.json()
