@@ -1,0 +1,36 @@
+name: Daily observatory data update
+
+on:
+  schedule:
+    # Run at 10:00 UTC every day — late enough that the previous day's
+    # data should be entered by the observer.
+    - cron: '0 10 * * *'
+  workflow_dispatch:   # also allow manual trigger from GitHub Actions UI
+
+jobs:
+  fetch-and-commit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Fetch yesterday's data
+        run: python scripts/fetch_ruao.py
+
+      - name: Commit and push if data changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/ruao_data.csv
+          # Only commit if there's actually something new
+          git diff --staged --quiet || git commit -m "chore: add observatory data for $(date -u -d yesterday '+%Y-%m-%d')"
+          git push
