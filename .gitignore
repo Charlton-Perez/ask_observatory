@@ -2,3 +2,5 @@ node_modules
 dist
 .env.local
 .env
+# Original extract file — public/ruao_data.csv is now the live source
+ruao_data_extract.csv
