@@ -13,14 +13,16 @@ Fields: Tx = daily max temp (°C), Tn = daily min temp (°C), Tdry = 09 UTC dry-
 export default async function handler(req) {
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
 
-  const { question, context, dailyRows, calendarSlices, recentRows, history, token } = await req.json()
+  const { question, context, dailyRows, calendarSlices, recentRows, today, history, token } = await req.json()
 
   if (token !== process.env.INVITE_TOKEN) return new Response('Unauthorized', { status: 401 })
   if (!question || !context) return new Response('Missing question or context', { status: 400 })
 
+  const todayStr = today || new Date().toISOString().slice(0, 10)
+
   // The dataset context is only sent once, as the first user turn, so it doesn't
   // repeat with every message and inflate costs as the conversation grows.
-  const dataContext = [`Dataset context:\n${JSON.stringify(context)}`]
+  const dataContext = [`Today's date: ${todayStr}\n\nDataset context:\n${JSON.stringify(context)}`]
   if (dailyRows?.length > 0)
     dataContext.push(`Raw daily record(s) for the date(s) mentioned:\n${JSON.stringify(dailyRows)}`)
   if (calendarSlices && Object.keys(calendarSlices).length > 0)

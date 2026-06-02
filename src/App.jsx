@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, extractDates, extractRecentDays, getRecentRows } from './dataParser'
+import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, extractDates, extractRecentDays, extractDateRange, getRecentRows, getDateRangeRows } from './dataParser'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
@@ -56,22 +56,33 @@ export default function App() {
     setMessages(prev => [...prev, { role: 'user', text }])
     setAsking(true)
     try {
+      const today = new Date().toISOString().slice(0, 10)
+
+      // 1. Explicit date range: "25 May to 1 June" → every row in that span
+      const dateRange = extractDateRange(text)
+
+      // 2. Recent period: "last 30 days / this week" → rows from today backwards
+      const recentN = !dateRange ? extractRecentDays(text) : null
+      const recentRows = dateRange
+        ? getDateRangeRows(dayIndex, dateRange.start, dateRange.end)
+        : recentN ? getRecentRows(dayIndex, recentN, today) : []
+
+      // 3. Specific individual dates — skip if already covered by a range/recent query
       const { specificDates, calendarDays } = extractDates(text)
-      // Specific dates: e.g. "14 October 1987" → one row
-      const dailyRows = specificDates.map(d => dayIndex[d]).filter(Boolean)
-      // Calendar days: e.g. "3rd January" → all ~118 Jan 3rd records across all years
+      const dailyRows = (dateRange || recentN)
+        ? []  // range/recent already covers any dates mentioned
+        : specificDates.map(d => dayIndex[d]).filter(Boolean)
+
+      // 4. Calendar-day slices: "3rd January" → all historical Jan 3rd records
       const calendarSlices = calendarDays.reduce((acc, key) => {
         if (calIndex[key]) acc[key] = calIndex[key]
         return acc
       }, {})
-      // Recent period: e.g. "last 30 days" → most recent N rows
-      const recentN = extractRecentDays(text)
-      const recentRows = recentN ? getRecentRows(dayIndex, recentN) : []
 
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, recentRows, history: messages, token }),
+        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, recentRows, today, history: messages, token }),
       })
       if (!res.ok) throw new Error(await res.text())
       const { answer } = await res.json()

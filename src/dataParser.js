@@ -390,8 +390,6 @@ export function extractDates(question) {
 // Returns number of days requested, or null if not found.
 export function extractRecentDays(question) {
   const q = question.toLowerCase()
-
-  // "last/past/recent N days/weeks/months"
   const m = q.match(/\b(?:last|past|recent|previous)\s+(\d+)\s+(day|days|week|weeks|month|months)\b/)
   if (m) {
     const n = parseInt(m[1])
@@ -399,18 +397,46 @@ export function extractRecentDays(question) {
     if (m[2].startsWith('month')) return n * 30
     return n
   }
-  // "last week" / "last month" (no number)
-  if (/\blast\s+week\b/.test(q))  return 7
-  if (/\blast\s+month\b/.test(q)) return 30
-  if (/\blast\s+year\b/.test(q))  return 365
-
+  if (/\blast\s+week\b/.test(q))   return 7
+  if (/\bthis\s+week\b/.test(q))   return 7
+  if (/\blast\s+month\b/.test(q))  return 30
+  if (/\bthis\s+month\b/.test(q))  return 30
+  if (/\blast\s+year\b/.test(q))   return 365
+  if (/\bthis\s+year\b/.test(q))   return 365
   return null
 }
 
-// Given a day index and number of days, return the most recent N daily records.
-export function getRecentRows(dayIndex, nDays) {
+// Detect explicit date ranges: "from X to Y", "between X and Y", "X to Y", "X through Y"
+// Returns { start: "YYYY-MM-DD", end: "YYYY-MM-DD" } or null.
+export function extractDateRange(question) {
+  // Try to find two parseable dates with a range connector between them
+  const connectors = /\s+(?:to|through|until|–|—|-|and)\s+/i
+  const rangePat = /\b((?:\d{1,2}(?:st|nd|rd|th)?\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s*\d{0,4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})\s+(?:to|through|until|–|—)\s+((?:\d{1,2}(?:st|nd|rd|th)?\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s*\d{0,4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})\b/i
+
+  // Parse the two dates from extractDates applied to just those substrings
+  const m = question.match(rangePat)
+  if (!m) return null
+  const d1 = extractDates(m[1])
+  const d2 = extractDates(m[2])
+  if (!d1.specificDates.length || !d2.specificDates.length) return null
+  const [start, end] = [d1.specificDates[0], d2.specificDates[0]].sort()
+  return { start, end }
+}
+
+// Return all rows between two dates (inclusive), in chronological order.
+export function getDateRangeRows(dayIndex, start, end) {
   return Object.values(dayIndex)
-    .sort((a, b) => b.date.localeCompare(a.date))
-    .slice(0, nDays)
-    .reverse()  // return in chronological order
+    .filter(r => r.date >= start && r.date <= end)
+    .sort((a, b) => a.date.localeCompare(b.date))
+}
+
+// Return the most recent N daily records relative to a reference date (today).
+export function getRecentRows(dayIndex, nDays, today) {
+  const refDate = today || new Date().toISOString().slice(0, 10)
+  const cutoff = new Date(refDate)
+  cutoff.setDate(cutoff.getDate() - nDays)
+  const cutoffStr = cutoff.toISOString().slice(0, 10)
+  return Object.values(dayIndex)
+    .filter(r => r.date > cutoffStr && r.date <= refDate)
+    .sort((a, b) => a.date.localeCompare(b.date))
 }
