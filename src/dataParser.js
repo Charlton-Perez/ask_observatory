@@ -5,17 +5,21 @@ import Papa from 'papaparse'
 // label: human-readable name used in the summary sent to Claude.
 // higher: true = higher values are "more extreme" (used for top-20 ranking direction).
 export const FIELDS = [
-  { key: 'Tx',    label: 'Daily max temp (°C)',         higher: true  },
-  { key: 'Tn',    label: 'Daily min temp (°C)',          higher: false },
-  { key: 'Tdry',  label: '09 UTC dry-bulb temp (°C)',   higher: null  }, // no natural extreme direction
-  { key: 'Twet',  label: 'Wet-bulb temp (°C)',          higher: null  },
-  { key: 'Pmsl',  label: 'Mean sea level pressure (hPa)', higher: true },
-  { key: 'RH',    label: 'Relative humidity (%)',        higher: null  },
-  { key: 'RR',    label: 'Rainfall (mm)',                higher: true  },
-  { key: 'sss',   label: 'Sunshine duration (hrs)',      higher: true  },
-  { key: 'sd_cm', label: 'Snow depth (cm)',              higher: true  },
-  { key: 'af',    label: 'Air frost (1=yes)',            higher: null  },
-  { key: 'gf',    label: 'Ground frost (1=yes)',         higher: null  },
+  { key: 'Tx',    label: 'Daily max temp (°C)',           higher: true  },
+  { key: 'Tn',    label: 'Daily min temp (°C)',            higher: false },
+  { key: 'Tdry',  label: '09 UTC dry-bulb temp (°C)',     higher: null  },
+  { key: 'Twet',  label: 'Wet-bulb temp (°C)',            higher: null  },
+  { key: 'Pmsl',  label: 'Mean sea level pressure (hPa)', higher: true  },
+  { key: 'RH',    label: 'Relative humidity (%)',          higher: null  },
+  { key: 'RR',    label: 'Rainfall (mm)',                  higher: true  },
+  { key: 'rd',    label: 'Rain day (1=yes)',               higher: null  },
+  { key: 'sss',   label: 'Sunshine duration (hrs)',        higher: true  },
+  { key: 'sd_cm', label: 'Snow depth (cm)',                higher: true  },
+  { key: 'af',    label: 'Air frost (1=yes)',              higher: null  },
+  { key: 'gf',    label: 'Ground frost (1=yes)',           higher: null  },
+  { key: 'ff_ms', label: 'Wind speed (m/s)',               higher: true  },
+  { key: 'dd',    label: 'Wind direction (deg/10)',         higher: null  },
+  { key: 'ww',    label: 'Present weather code (WMO)',      higher: null  },
 ]
 
 const MONTH_NAMES = [
@@ -171,7 +175,7 @@ export function buildContext(rows) {
   // rows within the active 30-year period.
   const normalsRaw = Array.from({ length: 12 }, () => ({
     Tx: [], Tn: [], Tdry: [], Twet: [], Pmsl: [], RH: [],
-    RR: [], sss: [], af: 0, gf: 0, n: 0,
+    RR: [], sss: [], ff_ms: [], af: 0, gf: 0, rd: 0, n: 0,
   }))
 
   // All-day lists for ranking (only fields with a clear extreme direction)
@@ -232,9 +236,10 @@ export function buildContext(rows) {
       const nb = normalsRaw[month - 1]
       nb.n++
       const push = (key) => { const v = num(row[key]); if (v !== null) nb[key].push(v) }
-      ;['Tx','Tn','Tdry','Twet','Pmsl','RH','RR','sss'].forEach(push)
+      ;['Tx','Tn','Tdry','Twet','Pmsl','RH','RR','sss','ff_ms'].forEach(push)
       if (num(row.af) === 1) nb.af++
       if (num(row.gf) === 1) nb.gf++
+      if (num(row.rd) === 1) nb.rd++
     }
   }
 
@@ -400,10 +405,12 @@ export function buildContext(rows) {
       meanWetBulb_Twet:  mean(nb.Twet),
       meanPressure_Pmsl: mean(nb.Pmsl),
       meanRH:            mean(nb.RH),
-      meanMonthlyRainfall_mm: nb.RR.length ? +(nb.RR.reduce((a,b)=>a+b,0) / yearsInPeriod).toFixed(1) : null,
-      meanMonthlySunshine_hrs: nb.sss.length ? +(nb.sss.reduce((a,b)=>a+b,0) / yearsInPeriod).toFixed(1) : null,
-      meanAirFrostDays:  +(nb.af / yearsInPeriod).toFixed(1),
-      meanGroundFrostDays: +(nb.gf / yearsInPeriod).toFixed(1),
+      meanMonthlyRainfall_mm:  nb.RR.length    ? +(nb.RR.reduce((a,b)=>a+b,0)    / yearsInPeriod).toFixed(1) : null,
+      meanMonthlySunshine_hrs: nb.sss.length   ? +(nb.sss.reduce((a,b)=>a+b,0)   / yearsInPeriod).toFixed(1) : null,
+      meanWindSpeed_ms:        mean(nb.ff_ms),
+      meanAirFrostDays:        +(nb.af / yearsInPeriod).toFixed(1),
+      meanGroundFrostDays:     +(nb.gf / yearsInPeriod).toFixed(1),
+      meanRainDays:            +(nb.rd / yearsInPeriod).toFixed(1),
     }
   })
 

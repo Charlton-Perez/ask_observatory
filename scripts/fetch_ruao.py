@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
 Fetch daily data from the Reading University Atmospheric Observatory
-CGI interface and append new rows to the CSV data file.
+CGI interface and keep the CSV up to date.
+
+Default behaviour (no arguments): fetch the last 10 days.
+For each day returned by the CGI:
+  - If the date is missing from the CSV: add it.
+  - If the date is present but has x (missing) values: update those fields.
+  - If the date is complete: leave it untouched.
 
 Usage:
-  python fetch_ruao.py                   # fetch yesterday
-  python fetch_ruao.py 2026-06-01        # fetch a specific date
+  python fetch_ruao.py                        # fetch/update last 10 days
+  python fetch_ruao.py 2026-06-01             # fetch a specific date
   python fetch_ruao.py 2026-05-01 2026-06-01  # fetch a date range
 """
 
@@ -20,6 +26,7 @@ from pathlib import Path
 # ── Config ────────────────────────────────────────────────────────────────────
 
 CGI_URL = "https://metdata.reading.ac.uk/cgi-bin/climate_extract.cgi"
+BACKFILL_DAYS = 10   # how many recent days to re-check for filled-in x values
 
 # Variables to fetch — must match the column names in ruao_data.csv
 VARIABLES = {
@@ -30,13 +37,19 @@ VARIABLES = {
     "Tx":   "y",   # Maximum temperature (degC)
     "Tn":   "y",   # Minimum temperature (degC)
     "RR":   "y",   # Rainfall 24h from 09GMT (mm)
+    "rd":   "y",   # Rain day (1=yes)
     "af":   "y",   # Air frost
     "gf":   "y",   # Ground frost
     "sd_cm":"y",   # Total snow depth (cm)
     "sss":  "y",   # Sunshine duration (h)
+    "ff_ms":"y",   # Wind speed (m/s)
+    "dd":   "y",   # Wind direction (deg/10)
+    "ww":   "y",   # Present weather code (WMO)
 }
 
-# Path to the CSV file (relative to this script's location)
+# Fields that can meaningfully be backfilled (skip metadata columns)
+BACKFILL_FIELDS = list(VARIABLES.keys())
+
 SCRIPT_DIR = Path(__file__).parent
 CSV_PATH = SCRIPT_DIR.parent / "public" / "ruao_data.csv"
 
@@ -59,7 +72,6 @@ def fetch_data(start: date, end: date) -> str:
     resp = requests.post(CGI_URL, data=payload, timeout=30)
     resp.raise_for_status()
 
-    # Extract the inline data block
     match = re.search(
         r"=+A copy of your extracted data follows=+<br>\s*(.*?)\s*={4,}",
         resp.text, re.DOTALL
@@ -67,18 +79,16 @@ def fetch_data(start: date, end: date) -> str:
     if not match:
         raise ValueError("Could not find data in response. The CGI may have changed.")
 
-    # Strip HTML tags
     raw = re.sub(r"<[^>]+>", "", match.group(1)).strip()
 
-    # The CGI splits each CSV row across multiple lines:
-    # continuation lines start with a comma. Rejoin them.
+    # CGI splits each row across multiple lines; continuation lines start with ','
     joined_lines = []
     for line in raw.splitlines():
         line = line.strip()
         if not line:
             continue
         if line.startswith(",") and joined_lines:
-            joined_lines[-1] += line   # append to previous row
+            joined_lines[-1] += line
         else:
             joined_lines.append(line)
 
@@ -87,62 +97,103 @@ def fetch_data(start: date, end: date) -> str:
 # ── Parse ─────────────────────────────────────────────────────────────────────
 
 def parse_csv_text(text: str) -> list[dict]:
-    """Parse the reassembled CSV text into a list of row dicts."""
+    """Parse the reassembled CGI CSV text into a list of row dicts."""
     reader = csv.DictReader(io.StringIO(text))
-    rows = []
-    for row in reader:
-        # Keep keys as-is (the CSV header has leading spaces on some columns);
-        # strip values only.
-        rows.append({k: (v.strip() if v is not None else "x")
-                     for k, v in row.items()})
-    return rows
+    return [{k: (v.strip() if v is not None else "x") for k, v in row.items()}
+            for row in reader]
 
-# ── Append ────────────────────────────────────────────────────────────────────
+def row_date_key(row: dict) -> str | None:
+    """Return 'YYYY-MM-DD' for a row dict, or None if unparseable."""
+    try:
+        y  = row.get("year",   "").strip()
+        mo = row.get(" month", row.get("month", "")).strip()
+        da = row.get(" day",   row.get("day",   "")).strip()
+        return f"{y}-{int(mo):02d}-{int(da):02d}"
+    except (ValueError, AttributeError):
+        return None
 
-def load_existing_dates(csv_path: Path) -> set[str]:
-    """Return set of 'YYYY-MM-DD' date strings already in the CSV."""
-    dates = set()
-    if not csv_path.exists():
-        return dates
+# ── Read / write full CSV ─────────────────────────────────────────────────────
+
+def read_csv(csv_path: Path) -> tuple[list[str], list[dict]]:
+    """Return (header_list, rows_as_dicts) for the full file."""
     with open(csv_path, newline="") as f:
         reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                y = row.get("year", "").strip()
-                m = row.get(" month", row.get("month", "")).strip()
-                d = row.get(" day", row.get("day", "")).strip()
-                dates.add(f"{y}-{int(m):02d}-{int(d):02d}")
-            except (ValueError, AttributeError):
-                pass
-    return dates
+        header = reader.fieldnames or []
+        rows = [dict(row) for row in reader]
+    return header, rows
 
-def append_rows(csv_path: Path, new_rows: list[dict], existing_dates: set[str]) -> int:
-    """Append rows not already present. Returns count of rows added."""
-    if not new_rows:
-        return 0
+def write_csv(csv_path: Path, header: list[str], rows: list[dict]) -> None:
+    """Overwrite the file with header + rows."""
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=header, extrasaction="raise")
+        writer.writeheader()
+        writer.writerows(rows)
 
-    # Read existing header to know column order
-    with open(csv_path, newline="") as f:
-        header = next(csv.reader(f))
+# ── Merge fresh CGI data into CSV ─────────────────────────────────────────────
 
-    added = 0
-    with open(csv_path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=header, extrasaction="ignore")
-        for row in new_rows:
-            y  = row.get("year", "").strip()
-            mo = row.get(" month", row.get("month", "")).strip()
-            da = row.get(" day", row.get("day", "")).strip()
-            try:
-                key = f"{y}-{int(mo):02d}-{int(da):02d}"
-            except ValueError:
-                continue
-            if key in existing_dates:
-                print(f"  Skipping {key} — already in file")
-                continue
-            writer.writerow(row)
-            print(f"  Added {key}")
-            added += 1
-    return added
+def merge_into_csv(fresh_rows: list[dict]) -> tuple[int, int]:
+    """
+    For each row returned by the CGI:
+      - If the date is missing from the CSV: append it.
+      - If the date exists but has x values: overwrite those fields with real values.
+      - If the date is complete: leave it.
+    Also extends the CSV header if the CGI returns new columns not yet in the file.
+    Returns (rows_added, fields_updated).
+    """
+    if not fresh_rows:
+        return 0, 0
+
+    header, all_rows = read_csv(CSV_PATH)
+
+    # Extend header with any new fields present in fresh data but not yet in the file.
+    # Fill existing rows with 'x' for those columns.
+    new_cols = [k for k in fresh_rows[0].keys() if k not in header]
+    if new_cols:
+        print(f"  Adding new column(s) to CSV: {new_cols}")
+        header = header + new_cols
+        for row in all_rows:
+            for col in new_cols:
+                row.setdefault(col, 'x')
+
+    by_date = {row_date_key(r): r for r in all_rows}
+
+    rows_added     = 0
+    fields_updated = 0
+    file_changed   = False
+
+    for fresh in fresh_rows:
+        key = row_date_key(fresh)
+        if not key:
+            continue
+
+        if key not in by_date:
+            # Date missing entirely — append
+            all_rows.append(fresh)
+            by_date[key] = fresh
+            print(f"  Added   {key}")
+            rows_added += 1
+            file_changed = True
+        else:
+            # Date exists — fill any x values
+            existing = by_date[key]
+            updated_fields = []
+            for field in BACKFILL_FIELDS:
+                existing_val = existing.get(field, "x").strip()
+                fresh_val    = fresh.get(field, "x").strip()
+                if existing_val == "x" and fresh_val != "x":
+                    existing[field] = fresh_val
+                    fields_updated += 1
+                    updated_fields.append(field)
+                    file_changed = True
+            if updated_fields:
+                print(f"  Updated {key}: filled in {updated_fields}")
+
+    if file_changed:
+        # Sort by date before writing to keep the file in order
+        all_rows.sort(key=lambda r: row_date_key(r) or "")
+        write_csv(CSV_PATH, header, all_rows)
+
+    return rows_added, fields_updated
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -151,7 +202,10 @@ def main():
     today = date.today()
 
     if len(args) == 0:
-        start = end = today - timedelta(days=1)
+        # Default: fetch the last BACKFILL_DAYS days — adds any missing dates
+        # and fills in x values that observers have since updated.
+        end   = today - timedelta(days=1)
+        start = end - timedelta(days=BACKFILL_DAYS - 1)
     elif len(args) == 1:
         start = end = datetime.strptime(args[0], "%Y-%m-%d").date()
     elif len(args) == 2:
@@ -162,13 +216,12 @@ def main():
         sys.exit(1)
 
     print(f"Fetching {start} to {end} from {CGI_URL}")
-    raw = fetch_data(start, end)
+    raw  = fetch_data(start, end)
     rows = parse_csv_text(raw)
     print(f"  Got {len(rows)} row(s) from CGI")
 
-    existing = load_existing_dates(CSV_PATH)
-    added = append_rows(CSV_PATH, rows, existing)
-    print(f"Done — {added} new row(s) appended to {CSV_PATH}")
+    added, updated = merge_into_csv(rows)
+    print(f"\nDone — {added} row(s) added, {updated} field(s) updated.")
 
 if __name__ == "__main__":
     main()
