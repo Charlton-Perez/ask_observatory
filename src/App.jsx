@@ -34,7 +34,7 @@ function detectAndComputeExceedance(question, mfIndex) {
   const q = question.toLowerCase()
 
   // Must look like a threshold/frequency/probability query
-  const isProbQuery = /\b(probabilit|chance|likelihood|likel|how often|how frequent|how many days|number of days|what.{0,10}(percent|%|fraction)|exceed|exceeded|above|over|below|under|frost|hot day|warm day)\b/i.test(q)
+  const isProbQuery = /\b(probabilit|chance|likelihood|likel|how often|how frequent|how many days|number of days|what.{0,10}(percent|%|fraction)|exceed|exceeded|warmer than|hotter than|colder than|cooler than|above|over|below|under|frost|hot day|warm day|how warm|how hot|how cold|how likely|how rare|how common)\b/i.test(q)
   if (!isProbQuery) return null
 
   // Extract numeric threshold — accepts "27°C", "27°", "27 degrees C", "27 degrees", "27 deg"
