@@ -388,6 +388,69 @@ export function buildContext(rows) {
     mostAirFrostDaysMonth:allMyEntries.map(([k,v]) => ({ label: v.label, value: v.af })).sort((a,b)=>b.value-a.value)[0],
   }
 
+  // ── Monthly exceedance probabilities ─────────────────────────────────────────
+  // For each calendar month, compute the % of days exceeding key thresholds,
+  // broken down by climate era. This lets Claude answer:
+  //   "probability of exceeding 28°C in June"
+  //   "how has the chance of a hot day in July changed over time?"
+  const EXCEEDANCE_ERAS = [
+    { key: 'all',       start: 1800, end: 9999 },
+    { key: '1961-1990', start: 1961, end: 1990 },
+    { key: '1991-2020', start: 1991, end: 2020 },
+    { key: '2001-now',  start: 2001, end: 9999 },
+  ]
+  // Thresholds: { field, threshold, direction: '>=' or '<' }
+  const EXCEEDANCE_THRESHOLDS = [
+    { field: 'Tx', threshold: 20, dir: '>=' },
+    { field: 'Tx', threshold: 25, dir: '>=' },
+    { field: 'Tx', threshold: 28, dir: '>=' },
+    { field: 'Tx', threshold: 30, dir: '>=' },
+    { field: 'Tn', threshold: 0,  dir: '<'  },  // air frost night
+    { field: 'Tn', threshold: 5,  dir: '<'  },  // cold night
+    { field: 'RR', threshold: 1,  dir: '>=' },  // rain day
+    { field: 'RR', threshold: 5,  dir: '>=' },  // moderate rain
+    { field: 'RR', threshold: 10, dir: '>=' },  // heavy rain
+  ]
+
+  // Build accumulators: monthExceedance[month0][eraKey][field_threshold] = { hit, n }
+  const mexAcc = Array.from({ length: 12 }, () =>
+    Object.fromEntries(EXCEEDANCE_ERAS.map(e => [e.key, {}]))
+  )
+  for (const row of rows) {
+    const year = parseInt(row.year), month = parseInt(row.month)
+    if (!year || !month) continue
+    const mo = month - 1
+    for (const era of EXCEEDANCE_ERAS) {
+      if (year < era.start || year > era.end) continue
+      const bucket = mexAcc[mo][era.key]
+      for (const { field, threshold, dir } of EXCEEDANCE_THRESHOLDS) {
+        const v = num(row[field])
+        const tKey = `${field}${dir}${threshold}`
+        if (!bucket[tKey]) bucket[tKey] = { hit: 0, n: 0 }
+        if (v !== null) {
+          bucket[tKey].n++
+          if (dir === '>=' && v >= threshold) bucket[tKey].hit++
+          if (dir === '<'  && v <  threshold) bucket[tKey].hit++
+        }
+      }
+    }
+  }
+
+  const pct = (hit, n) => n >= 10 ? +((hit / n) * 100).toFixed(1) : null
+  const monthlyExceedance = Array.from({ length: 12 }, (_, i) => {
+    const out = { month: i + 1, name: MONTH_NAMES[i] }
+    for (const { field, threshold, dir } of EXCEEDANCE_THRESHOLDS) {
+      const tKey = `${field}${dir}${threshold}`
+      const label = `${field}${dir}${threshold}`
+      out[label] = {}
+      for (const era of EXCEEDANCE_ERAS) {
+        const b = mexAcc[i][era.key][tKey] || { hit: 0, n: 0 }
+        out[label][era.key] = pct(b.hit, b.n)
+      }
+    }
+    return out
+  })
+
   // Build WMO normals — monthly means over the active 30-year period.
   // For RR and sss, the normal is the mean of the 30 annual monthly totals
   // (i.e. average total per month), not the mean of daily values.
@@ -422,6 +485,7 @@ export function buildContext(rows) {
     monthlyTopTens,
     seasonalTopTens,
     longestRuns: computeRuns(rows),
+    monthlyExceedance,
     byMonth,
     byDecade,
     byYear,
