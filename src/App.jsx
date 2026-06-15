@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, buildMonthFieldIndex, computeMonthExceedance, extractDates, extractRecentDays, extractDateRange, getRecentRows, getDateRangeRows } from './dataParser'
+import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, buildMonthFieldIndex, computeMonthExceedance, computeAnnualExceedanceCounts, extractDates, extractRecentDays, extractDateRange, getRecentRows, getDateRangeRows } from './dataParser'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
@@ -33,26 +33,22 @@ function detectAndComputeExceedance(question, mfIndex) {
   if (!mfIndex) return null
   const q = question.toLowerCase()
 
-  // Must look like a probability/chance/frequency query
-  const isProbQuery = /\b(probabilit|chance|likelihood|likel|how often|how frequent|how many days|what.{0,10}(percent|%|fraction)|exceed|above|over|below|under|frost|hot day|warm day)\b/i.test(q)
+  // Must look like a threshold/frequency/probability query
+  const isProbQuery = /\b(probabilit|chance|likelihood|likel|how often|how frequent|how many days|number of days|what.{0,10}(percent|%|fraction)|exceed|exceeded|above|over|below|under|frost|hot day|warm day)\b/i.test(q)
   if (!isProbQuery) return null
 
-  // Extract numeric threshold (e.g. "28°C", "28 degrees", "28 deg")
-  const threshM = q.match(/(\d+(?:\.\d+)?)\s*(?:°|degrees?|deg)?\s*c\b/) ||
-                  q.match(/\b(\d+(?:\.\d+)?)\s*(?:°c|degrees celsius)\b/i)
+  // Extract numeric threshold — accepts "27°C", "27°", "27 degrees C", "27 degrees", "27 deg"
+  const threshM = q.match(/(\d+(?:\.\d+)?)\s*(?:°\s*c(?:elsius)?|degrees?\s*c(?:elsius)?|deg\s*c)\b/i) ||
+                  q.match(/(\d+(?:\.\d+)?)\s*(?:degrees?|deg|°)\b/i)
   if (!threshM) return null
   const threshold = parseFloat(threshM[1])
+  if (threshold < -50 || threshold > 60) return null  // sanity check
 
   // Determine field and direction
   let field, dir
-  if (/\b(max|maximum|daytime|afternoon|high|warm|hot|tx)\b/.test(q) ||
-      (/\b(exceed|above|over)\b/.test(q) && !/\b(min|night|tn)\b/.test(q))) {
-    field = 'Tx'; dir = '>='
-  } else if (/\b(min|minimum|night|overnight|tn|frost)\b/.test(q) ||
-             /\b(below|under)\b/.test(q)) {
+  if (/\b(min|minimum|night|overnight|tn|frost)\b/.test(q) || /\b(below|under)\b/.test(q)) {
     field = 'Tn'; dir = threshold <= 5 ? '<' : '>='
   } else {
-    // Default: assume Tx >= threshold for temperature queries
     field = 'Tx'; dir = '>='
   }
 
@@ -60,15 +56,22 @@ function detectAndComputeExceedance(question, mfIndex) {
   const preComputed = (field === 'Tx' && dir === '>=' && PRE_COMPUTED_TX.includes(threshold)) ||
                       (field === 'Tn' && dir === '<'  && PRE_COMPUTED_TN.includes(threshold)) ||
                       (field === 'RR' && dir === '>=' && PRE_COMPUTED_RR.includes(threshold))
-  if (preComputed) return null  // context already has it
+  if (preComputed) return null
 
-  // Extract month from question
+  // Try to extract a month
   const monthM = q.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/i)
-  if (!monthM) return null  // month-level query requires a month
-  const month = MONTH_MAP_APP[monthM[1].toLowerCase()]
-  if (!month) return null
+  const month = monthM ? MONTH_MAP_APP[monthM[1].toLowerCase()] : null
 
-  return computeMonthExceedance(mfIndex, month, field, threshold, dir)
+  if (month) {
+    // Month-level: return exceedance % per era
+    return computeMonthExceedance(mfIndex, month, field, threshold, dir)
+  } else {
+    // No month: return annual day counts, optionally filtered by year range
+    const yearMatches = [...question.matchAll(/\b((?:19|20)\d{2})\b/g)].map(m => parseInt(m[1]))
+    const startYear = yearMatches.length ? Math.min(...yearMatches) : null
+    const endYear   = yearMatches.length ? Math.max(...yearMatches) : null
+    return computeAnnualExceedanceCounts(mfIndex, field, threshold, dir, startYear, endYear)
+  }
 }
 
 function checkAccess() {

@@ -525,7 +525,7 @@ const EXCEEDANCE_ERAS = [
 // Returns { pct_all, byEra: { '1961-1990': pct, ... }, n_all, field, threshold, dir, monthName }
 export function computeMonthExceedance(monthFieldIndex, month, field, threshold, dir) {
   const entries = monthFieldIndex[month]?.[field] ?? []
-  const result = { field, threshold, dir, monthName: MONTH_NAMES[month - 1], byEra: {} }
+  const result = { type: 'monthly_exceedance', field, threshold, dir, monthName: MONTH_NAMES[month - 1], byEra: {} }
   for (const era of EXCEEDANCE_ERAS) {
     const subset = entries.filter(e => e.year >= era.start && e.year <= era.end)
     const hit = subset.filter(e => dir === '>=' ? e.value >= threshold : e.value < threshold).length
@@ -536,6 +536,34 @@ export function computeMonthExceedance(monthFieldIndex, month, field, threshold,
   result.pct_all = result.byEra.all?.pct ?? null
   result.n_all   = result.byEra.all?.n   ?? 0
   return result
+}
+
+// Compute annual day counts for a given field/threshold across all months.
+// startYear/endYear: optional filter (null = full record).
+// Returns { type, field, threshold, dir, yearRange, totalDays, byYear: [{year, days}] }
+export function computeAnnualExceedanceCounts(monthFieldIndex, field, threshold, dir, startYear, endYear) {
+  const allEntries = []
+  for (let m = 1; m <= 12; m++) {
+    allEntries.push(...(monthFieldIndex[m]?.[field] ?? []))
+  }
+  const filtered = (startYear != null)
+    ? allEntries.filter(e => e.year >= startYear && e.year <= endYear)
+    : allEntries
+
+  const yearMap = {}
+  for (const { year, value } of filtered) {
+    if (!yearMap[year]) yearMap[year] = 0
+    if (dir === '>=' ? value >= threshold : value < threshold) yearMap[year]++
+  }
+  const byYear = Object.entries(yearMap).sort(([a],[b]) => a - b).map(([y, days]) => ({ year: parseInt(y), days }))
+  return {
+    type: 'annual_counts',
+    field, threshold, dir,
+    description: `${field} ${dir} ${threshold}°C`,
+    yearRange: startYear != null ? `${startYear}–${endYear}` : 'full record',
+    totalDays: byYear.reduce((s, y) => s + y.days, 0),
+    byYear,
+  }
 }
 
 // ── Date extraction from question text ───────────────────────────────────────
