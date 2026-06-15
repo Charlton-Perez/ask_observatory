@@ -144,7 +144,7 @@ async function callWithRetry(messages, maxAttempts = 3) {
 export default async function handler(req) {
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
 
-  const { question, context, dailyRows, calendarSlices, recentRows, today, history, token } = await req.json()
+  const { question, context, dailyRows, calendarSlices, recentRows, exceedanceSlice, today, history, token } = await req.json()
 
   if (token !== process.env.INVITE_TOKEN) return new Response('Unauthorized', { status: 401 })
   if (!question || !context) return new Response('Missing question or context', { status: 400 })
@@ -159,6 +159,8 @@ export default async function handler(req) {
     dataContext.push(`All historical records for the calendar day(s) mentioned (sorted by Tx descending):\n${JSON.stringify(calendarSlices)}`)
   if (recentRows?.length > 0)
     dataContext.push(`Daily records for the recent period requested (${recentRows.length} days, chronological):\n${JSON.stringify(recentRows)}`)
+  if (exceedanceSlice)
+    dataContext.push(`On-demand exceedance computation for this query (computed from full daily record in the browser):\n${JSON.stringify(exceedanceSlice)}\nUse these figures directly in your answer — state the era and sample size (n).`)
 
   // Build full message list: context preamble + capped history + current question
   const recentHistory = (history || []).slice(-20)

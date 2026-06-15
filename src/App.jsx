@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, extractDates, extractRecentDays, extractDateRange, getRecentRows, getDateRangeRows } from './dataParser'
+import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, buildMonthFieldIndex, computeMonthExceedance, extractDates, extractRecentDays, extractDateRange, getRecentRows, getDateRangeRows } from './dataParser'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
@@ -15,6 +15,62 @@ const EXAMPLE_QUESTIONS = [
   'How many air frost days does January typically have?',
 ]
 
+const MONTH_MAP_APP = {
+  january:1,february:2,march:3,april:4,may:5,june:6,
+  july:7,august:8,september:9,october:10,november:11,december:12,
+  jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12,
+}
+
+// Detect threshold/probability questions and compute exceedance on the fly.
+// Returns null if the question isn't about a specific threshold, or if the
+// pre-computed monthlyExceedance table already covers it (avoids duplication).
+// When it fires it returns a compact object: { field, threshold, dir, monthName, pct_all, byEra }
+const PRE_COMPUTED_TX = [20, 25, 28, 30]
+const PRE_COMPUTED_TN = [0, 5]
+const PRE_COMPUTED_RR = [1, 5, 10]
+
+function detectAndComputeExceedance(question, mfIndex) {
+  if (!mfIndex) return null
+  const q = question.toLowerCase()
+
+  // Must look like a probability/chance/frequency query
+  const isProbQuery = /\b(probabilit|chance|likelihood|likel|how often|how frequent|how many days|what.{0,10}(percent|%|fraction)|exceed|above|over|below|under|frost|hot day|warm day)\b/i.test(q)
+  if (!isProbQuery) return null
+
+  // Extract numeric threshold (e.g. "28°C", "28 degrees", "28 deg")
+  const threshM = q.match(/(\d+(?:\.\d+)?)\s*(?:°|degrees?|deg)?\s*c\b/) ||
+                  q.match(/\b(\d+(?:\.\d+)?)\s*(?:°c|degrees celsius)\b/i)
+  if (!threshM) return null
+  const threshold = parseFloat(threshM[1])
+
+  // Determine field and direction
+  let field, dir
+  if (/\b(max|maximum|daytime|afternoon|high|warm|hot|tx)\b/.test(q) ||
+      (/\b(exceed|above|over)\b/.test(q) && !/\b(min|night|tn)\b/.test(q))) {
+    field = 'Tx'; dir = '>='
+  } else if (/\b(min|minimum|night|overnight|tn|frost)\b/.test(q) ||
+             /\b(below|under)\b/.test(q)) {
+    field = 'Tn'; dir = threshold <= 5 ? '<' : '>='
+  } else {
+    // Default: assume Tx >= threshold for temperature queries
+    field = 'Tx'; dir = '>='
+  }
+
+  // Check if this is already in the pre-computed table (avoid sending duplicate info)
+  const preComputed = (field === 'Tx' && dir === '>=' && PRE_COMPUTED_TX.includes(threshold)) ||
+                      (field === 'Tn' && dir === '<'  && PRE_COMPUTED_TN.includes(threshold)) ||
+                      (field === 'RR' && dir === '>=' && PRE_COMPUTED_RR.includes(threshold))
+  if (preComputed) return null  // context already has it
+
+  // Extract month from question
+  const monthM = q.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/i)
+  if (!monthM) return null  // month-level query requires a month
+  const month = MONTH_MAP_APP[monthM[1].toLowerCase()]
+  if (!month) return null
+
+  return computeMonthExceedance(mfIndex, month, field, threshold, dir)
+}
+
 function checkAccess() {
   return new URLSearchParams(window.location.search).get('token') === INVITE_TOKEN
 }
@@ -24,6 +80,7 @@ export default function App() {
   const [context, setContext]         = useState(null)  // sent with every query
   const [dayIndex, setDayIndex]       = useState(null)  // "YYYY-MM-DD" lookups
   const [calIndex, setCalIndex]       = useState(null)  // "MM-DD" all-years lookups
+  const [mfIndex, setMfIndex]         = useState(null)  // month→field→[{year,value}] for on-demand exceedance
   const [loadError, setLoadError] = useState(null)
   const [messages, setMessages] = useState([])
   const [question, setQuestion] = useState('')
@@ -41,6 +98,7 @@ export default function App() {
         setContext(buildContext(rows))
         setDayIndex(buildDayIndex(rows))
         setCalIndex(buildCalendarDayIndex(rows))
+        setMfIndex(buildMonthFieldIndex(rows))
       })
       .catch(e => setLoadError('Could not load dataset: ' + e.message))
   }, [hasAccess])
@@ -79,10 +137,15 @@ export default function App() {
         return acc
       }, {})
 
+      // 5. On-demand exceedance: detect threshold questions not in pre-computed table.
+      //    Extracts field, threshold, direction and month from the question text,
+      //    computes the exceedance % per era in the browser, and sends only the result.
+      const exceedanceSlice = detectAndComputeExceedance(text, mfIndex)
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, recentRows, today, history: messages, token }),
+        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, recentRows, exceedanceSlice, today, history: messages, token }),
       })
       if (!res.ok) throw new Error(await res.text())
       const { answer } = await res.json()

@@ -492,6 +492,52 @@ export function buildContext(rows) {
   }
 }
 
+// ── Month-field index: for on-demand exceedance computation ──────────────────
+// Returns { 1: { Tx: [{year, value},...], Tn: [...], RR: [...] }, 2: {...}, ... }
+// Kept separate from buildContext so App.jsx can compute arbitrary thresholds
+// without sending raw rows to the API.
+const EXCEEDANCE_FIELDS = ['Tx', 'Tn', 'RR', 'sss', 'ff_ms']
+export function buildMonthFieldIndex(rows) {
+  const index = {}
+  for (let m = 1; m <= 12; m++) {
+    index[m] = Object.fromEntries(EXCEEDANCE_FIELDS.map(f => [f, []]))
+  }
+  for (const row of rows) {
+    const year = parseInt(row.year), month = parseInt(row.month)
+    if (!year || !month) continue
+    for (const f of EXCEEDANCE_FIELDS) {
+      const v = num(row[f])
+      if (v !== null) index[month][f].push({ year, value: v })
+    }
+  }
+  return index
+}
+
+const EXCEEDANCE_ERAS = [
+  { key: 'all',       start: 1800, end: 9999 },
+  { key: '1961-1990', start: 1961, end: 1990 },
+  { key: '1991-2020', start: 1991, end: 2020 },
+  { key: '2001-now',  start: 2001, end: 9999 },
+]
+
+// Compute exceedance probability for a given field/threshold/direction in a month.
+// direction: '>=' (hot/wet) or '<' (frost/cold)
+// Returns { pct_all, byEra: { '1961-1990': pct, ... }, n_all, field, threshold, dir, monthName }
+export function computeMonthExceedance(monthFieldIndex, month, field, threshold, dir) {
+  const entries = monthFieldIndex[month]?.[field] ?? []
+  const result = { field, threshold, dir, monthName: MONTH_NAMES[month - 1], byEra: {} }
+  for (const era of EXCEEDANCE_ERAS) {
+    const subset = entries.filter(e => e.year >= era.start && e.year <= era.end)
+    const hit = subset.filter(e => dir === '>=' ? e.value >= threshold : e.value < threshold).length
+    result.byEra[era.key] = subset.length >= 10
+      ? { pct: +((hit / subset.length) * 100).toFixed(1), n: subset.length }
+      : null
+  }
+  result.pct_all = result.byEra.all?.pct ?? null
+  result.n_all   = result.byEra.all?.n   ?? 0
+  return result
+}
+
 // ── Date extraction from question text ───────────────────────────────────────
 const MONTH_MAP = {
   january:1, february:2, march:3, april:4, may:5, june:6,
