@@ -529,12 +529,28 @@ function computeHeatwaves(rows, threshold = 28, minDays = 3) {
   }
   closeRun()
 
-  // Decade counts
+  // Decade and year counts
   const byDecade = {}
+  const byYear   = {}
   for (const ev of events) {
-    const decade = `${Math.floor(parseInt(ev.start) / 10) * 10}s`
+    const y = parseInt(ev.start)
+    const decade = `${Math.floor(y / 10) * 10}s`
     byDecade[decade] = (byDecade[decade] || 0) + 1
+    byYear[y]        = (byYear[y]        || 0) + 1
   }
+
+  // Gap between consecutive heatwaves (days from end of one to start of next)
+  const gaps = []
+  for (let i = 1; i < events.length; i++) {
+    const prev = events[i - 1], curr = events[i]
+    const gapDays = Math.round(
+      (new Date(curr.start) - new Date(prev.end)) / 86400000
+    )
+    gaps.push({ from: prev.end, to: curr.start, days: gapDays })
+  }
+  const shortestGap = gaps.length ? gaps.reduce((a, b) => b.days < a.days ? b : a) : null
+  const longestGap  = gaps.length ? gaps.reduce((a, b) => b.days > a.days ? b : a) : null
+  const meanGapDays = gaps.length ? +(gaps.reduce((s, g) => s + g.days, 0) / gaps.length).toFixed(0) : null
 
   const longest = events.length ? events.reduce((a, b) => b.days > a.days ? b : a) : null
   const hottest = events.length ? events.reduce((a, b) => (b.peakTx ?? 0) > (a.peakTx ?? 0) ? b : a) : null
@@ -544,10 +560,12 @@ function computeHeatwaves(rows, threshold = 28, minDays = 3) {
     minDays,
     definition: `UK Met Office SE England: Tx ≥ ${threshold}°C for ≥ ${minDays} consecutive days`,
     totalEvents: events.length,
-    events,   // chronological, full list
+    events,
     longestEvent: longest,
     hottestEvent: hottest,
     byDecade,
+    byYear,
+    gapStats: { shortestGap, longestGap, meanGapDays },
   }
 }
 
