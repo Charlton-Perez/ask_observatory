@@ -485,10 +485,69 @@ export function buildContext(rows) {
     monthlyTopTens,
     seasonalTopTens,
     longestRuns: computeRuns(rows),
+    heatwaves: computeHeatwaves(rows),
     monthlyExceedance,
     byMonth,
     byDecade,
     byYear,
+  }
+}
+
+// ── Heatwave detection ────────────────────────────────────────────────────────
+// UK Met Office definition for SE England / Reading: Tx ≥ 28°C for ≥ 3 consecutive days.
+// Returns a summary object with all events and aggregate statistics.
+function computeHeatwaves(rows, threshold = 28, minDays = 3) {
+  const sorted = [...rows]
+    .map(r => ({ ...r, year: parseInt(r.year), month: parseInt(r.month), day: parseInt(r.day) }))
+    .filter(r => r.year && r.month && r.day)
+    .sort((a, b) => dateFmt(a.year, a.month, a.day).localeCompare(dateFmt(b.year, b.month, b.day)))
+
+  const events = []
+  let runStart = null, runRows = []
+
+  const closeRun = () => {
+    if (runRows.length >= minDays) {
+      const txVals = runRows.map(r => num(r.Tx)).filter(v => v !== null)
+      events.push({
+        start:   dateFmt(runRows[0].year,  runRows[0].month,  runRows[0].day),
+        end:     dateFmt(runRows[runRows.length - 1].year, runRows[runRows.length - 1].month, runRows[runRows.length - 1].day),
+        days:    runRows.length,
+        peakTx:  txVals.length ? +Math.max(...txVals).toFixed(1) : null,
+        meanTx:  txVals.length ? +(txVals.reduce((a, b) => a + b, 0) / txVals.length).toFixed(1) : null,
+      })
+    }
+    runStart = null; runRows = []
+  }
+
+  for (const row of sorted) {
+    const tx = num(row.Tx)
+    if (tx !== null && tx >= threshold) {
+      runRows.push(row)
+    } else {
+      closeRun()
+    }
+  }
+  closeRun()
+
+  // Decade counts
+  const byDecade = {}
+  for (const ev of events) {
+    const decade = `${Math.floor(parseInt(ev.start) / 10) * 10}s`
+    byDecade[decade] = (byDecade[decade] || 0) + 1
+  }
+
+  const longest = events.length ? events.reduce((a, b) => b.days > a.days ? b : a) : null
+  const hottest = events.length ? events.reduce((a, b) => (b.peakTx ?? 0) > (a.peakTx ?? 0) ? b : a) : null
+
+  return {
+    threshold,
+    minDays,
+    definition: `UK Met Office SE England: Tx ≥ ${threshold}°C for ≥ ${minDays} consecutive days`,
+    totalEvents: events.length,
+    events,   // chronological, full list
+    longestEvent: longest,
+    hottestEvent: hottest,
+    byDecade,
   }
 }
 
