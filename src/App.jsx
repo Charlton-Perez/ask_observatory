@@ -21,30 +21,31 @@ const MONTH_MAP_APP = {
   jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12,
 }
 
-// Detect threshold/probability questions and compute exceedance on the fly.
-// Returns null if the question isn't about a specific threshold, or if the
-// pre-computed monthlyExceedance table already covers it (avoids duplication).
-// When it fires it returns a compact object: { field, threshold, dir, monthName, pct_all, byEra }
 const PRE_COMPUTED_TX = [20, 25, 28, 30]
 const PRE_COMPUTED_TN = [0, 5]
 const PRE_COMPUTED_RR = [1, 5, 10]
+const MONTH_NAMES_APP = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
-function detectAndComputeExceedance(question, mfIndex) {
+// Detect threshold/frequency questions and compute exceedance on the fly.
+// Returns a result combining:
+//   historical — climatological background (% per era for a month, or per-year counts)
+//   currentPeriod — actual count for "this year", "this month", or a specific year/month
+// Pre-computed thresholds skip historical (already in context) but still compute currentPeriod.
+function detectAndComputeExceedance(question, mfIndex, dayIndex, today) {
   if (!mfIndex) return null
   const q = question.toLowerCase()
+  const curYear  = parseInt(today.slice(0, 4))
+  const curMonth = parseInt(today.slice(5, 7))
 
-  // Must look like a threshold/frequency/probability query
   const isProbQuery = /\b(probabilit|chance|likelihood|likel|how often|how frequent|how many days|number of days|what.{0,10}(percent|%|fraction)|exceed|exceeded|warmer than|hotter than|colder than|cooler than|above|over|below|under|frost|hot day|warm day|how warm|how hot|how cold|how likely|how rare|how common)\b/i.test(q)
   if (!isProbQuery) return null
 
-  // Extract numeric threshold — accepts "27°C", "27°", "27 degrees C", "27 degrees", "27 deg"
   const threshM = q.match(/(\d+(?:\.\d+)?)\s*(?:°\s*c(?:elsius)?|degrees?\s*c(?:elsius)?|deg\s*c)\b/i) ||
                   q.match(/(\d+(?:\.\d+)?)\s*(?:degrees?|deg|°)\b/i)
   if (!threshM) return null
   const threshold = parseFloat(threshM[1])
-  if (threshold < -50 || threshold > 60) return null  // sanity check
+  if (threshold < -50 || threshold > 60) return null
 
-  // Determine field and direction
   let field, dir
   if (/\b(min|minimum|night|overnight|tn|frost)\b/.test(q) || /\b(below|under)\b/.test(q)) {
     field = 'Tn'; dir = threshold <= 5 ? '<' : '>='
@@ -52,26 +53,70 @@ function detectAndComputeExceedance(question, mfIndex) {
     field = 'Tx'; dir = '>='
   }
 
-  // Check if this is already in the pre-computed table (avoid sending duplicate info)
-  const preComputed = (field === 'Tx' && dir === '>=' && PRE_COMPUTED_TX.includes(threshold)) ||
-                      (field === 'Tn' && dir === '<'  && PRE_COMPUTED_TN.includes(threshold)) ||
-                      (field === 'RR' && dir === '>=' && PRE_COMPUTED_RR.includes(threshold))
-  if (preComputed) return null
+  const isPreComputed = (field === 'Tx' && dir === '>=' && PRE_COMPUTED_TX.includes(threshold)) ||
+                        (field === 'Tn' && dir === '<'  && PRE_COMPUTED_TN.includes(threshold)) ||
+                        (field === 'RR' && dir === '>=' && PRE_COMPUTED_RR.includes(threshold))
 
-  // Try to extract a month
-  const monthM = q.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/i)
-  const month = monthM ? MONTH_MAP_APP[monthM[1].toLowerCase()] : null
+  // Detect time scope indicators
+  const thisYearQ  = /\b(this year|so far|year to date|ytd|current year|already this year)\b/.test(q)
+  const thisMonthQ = /\b(this month|month to date|so far this month)\b/.test(q)
+  const allYears   = [...question.matchAll(/\b((?:19|20)\d{2})\b/g)].map(m => parseInt(m[1]))
 
-  if (month) {
-    // Month-level: return exceedance % per era
-    return computeMonthExceedance(mfIndex, month, field, threshold, dir)
+  // Named month in question
+  const monthM     = q.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/i)
+  const namedMonth = monthM ? MONTH_MAP_APP[monthM[1].toLowerCase()] : null
+
+  const wantsCurrentPeriod = thisYearQ || thisMonthQ || allYears.length > 0
+
+  // Pre-computed + no current-period request → already in context, skip
+  if (isPreComputed && !wantsCurrentPeriod) return null
+
+  const result = { type: 'threshold_query', field, threshold, dir }
+
+  // Historical background (skip if pre-computed — already in monthlyExceedance context)
+  if (!isPreComputed) {
+    const histYears = allYears.filter(y => !(thisYearQ && y === curYear))
+    if (namedMonth && !thisMonthQ) {
+      result.historical = computeMonthExceedance(mfIndex, namedMonth, field, threshold, dir)
+    } else if (!namedMonth) {
+      const sy = histYears.length ? Math.min(...histYears) : null
+      const ey = histYears.length ? Math.max(...histYears) : null
+      result.historical = computeAnnualExceedanceCounts(mfIndex, field, threshold, dir, sy, ey)
+    }
   } else {
-    // No month: return annual day counts, optionally filtered by year range
-    const yearMatches = [...question.matchAll(/\b((?:19|20)\d{2})\b/g)].map(m => parseInt(m[1]))
-    const startYear = yearMatches.length ? Math.min(...yearMatches) : null
-    const endYear   = yearMatches.length ? Math.max(...yearMatches) : null
-    return computeAnnualExceedanceCounts(mfIndex, field, threshold, dir, startYear, endYear)
+    result.historicalNote = `Historical exceedance data for ${field}${dir}${threshold} is in the monthlyExceedance context.`
   }
+
+  // Current-period actual count — computed from dayIndex when a specific period is requested
+  if (wantsCurrentPeriod && dayIndex) {
+    const scopeYear  = thisYearQ ? curYear
+                     : allYears.length === 1 ? allYears[0]
+                     : allYears.length > 1  ? Math.max(...allYears)
+                     : curYear
+    const scopeMonth = thisMonthQ ? curMonth : namedMonth
+
+    const rows = Object.values(dayIndex).filter(r => {
+      if (!r.date) return false
+      const ry = parseInt(r.date.slice(0, 4))
+      const rm = parseInt(r.date.slice(5, 7))
+      if (ry !== scopeYear) return false
+      if (scopeMonth && rm !== scopeMonth) return false
+      if (scopeYear === curYear && r.date > today) return false
+      return true
+    })
+    const hit = rows.filter(r => {
+      const v = r[field]; return v != null && (dir === '>=' ? v >= threshold : v < threshold)
+    }).length
+    const monthLabel = scopeMonth ? `${MONTH_NAMES_APP[scopeMonth - 1]} ` : ''
+    const partial    = scopeYear === curYear ? ` (to ${today})` : ''
+    result.currentPeriod = {
+      scope: `${monthLabel}${scopeYear}${partial}`,
+      daysInRecord: rows.length,
+      count: hit,
+    }
+  }
+
+  return result
 }
 
 // Detect ETCCDI index queries for a specific year or month+year and compute
@@ -199,7 +244,7 @@ export default function App() {
       // 6. On-demand exceedance: detect threshold questions not in pre-computed table.
       //    Extracts field, threshold, direction and month from the question text,
       //    computes the exceedance % per era in the browser, and sends only the result.
-      const exceedanceSlice = detectAndComputeExceedance(text, mfIndex)
+      const exceedanceSlice = detectAndComputeExceedance(text, mfIndex, dayIndex, today)
 
       const res = await fetch('/api/chat', {
         method: 'POST',
