@@ -40,8 +40,13 @@ function detectAndComputeExceedance(question, mfIndex, dayIndex, today) {
   const isProbQuery = /\b(probabilit|chance|likelihood|likel|how often|how frequent|how many days|number of days|what.{0,10}(percent|%|fraction)|exceed|exceeded|warmer than|hotter than|colder than|cooler than|above|over|below|under|frost|hot day|warm day|how warm|how hot|how cold|how likely|how rare|how common)\b/i.test(q)
   if (!isProbQuery) return null
 
+  // Match threshold in order of specificity:
+  // 1. explicit unit: "30°C", "30 degrees C", "30 deg C"
+  // 2. degree marker alone: "30°", "30 degrees", "30 deg"
+  // 3. bare number after a direction word: "above 30", "over 34", "exceeded 27"
   const threshM = q.match(/(\d+(?:\.\d+)?)\s*(?:°\s*c(?:elsius)?|degrees?\s*c(?:elsius)?|deg\s*c)\b/i) ||
-                  q.match(/(\d+(?:\.\d+)?)\s*(?:degrees?|deg|°)\b/i)
+                  q.match(/(\d+(?:\.\d+)?)\s*(?:degrees?|deg|°)\b/i) ||
+                  q.match(/(?:above|over|exceed(?:s|ed|ing)?|warmer than|hotter than|colder than|cooler than|below|under)\s+(\d+(?:\.\d+)?)\b/i)
   if (!threshM) return null
   const threshold = parseFloat(threshM[1])
   if (threshold < -50 || threshold > 60) return null
