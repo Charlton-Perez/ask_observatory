@@ -74,6 +74,59 @@ function detectAndComputeExceedance(question, mfIndex) {
   }
 }
 
+// Detect ETCCDI index queries for a specific year or month+year and compute
+// counts from dayIndex in the browser. Covers "this year so far", "in 2023",
+// "in June 2023" without sending raw rows to the API.
+const ETCCDI_TERMS = /\b(summer days?|tropical nights?|frost days?|ice days?|heavy rain days?|SU\b|TR\b|FD\b|ID\b|R10|R20|warm days?|hot days?|heatwave days?)\b/i
+function detectAndComputeEtccdi(question, dayIndex, today) {
+  if (!dayIndex) return null
+  if (!ETCCDI_TERMS.test(question)) return null
+
+  const q        = question.toLowerCase()
+  const curYear  = parseInt(today.slice(0, 4))
+  const curDate  = today
+
+  // Detect target year
+  let targetYear = null
+  if (/\b(this year|so far|year to date|ytd|current year)\b/.test(q)) targetYear = curYear
+  else {
+    const ym = question.match(/\b((19|20)\d{2})\b/)
+    if (ym) targetYear = parseInt(ym[1])
+  }
+  if (!targetYear) return null
+
+  // Detect optional target month
+  const monthM = q.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/i)
+  const targetMonth = monthM ? MONTH_MAP_APP[monthM[1].toLowerCase()] : null
+
+  // Filter dayIndex
+  const rows = Object.values(dayIndex).filter(r => {
+    if (!r.date) return false
+    const y = parseInt(r.date.slice(0, 4))
+    const m = parseInt(r.date.slice(5, 7))
+    if (y !== targetYear) return false
+    if (targetMonth && m !== targetMonth) return false
+    if (targetYear === curYear && r.date > curDate) return false  // exclude future
+    return true
+  })
+  if (!rows.length) return null
+
+  const count = (fn) => rows.filter(fn).length
+  return {
+    type:       'etccdi_slice',
+    year:       targetYear,
+    month:      targetMonth || 'full year',
+    daysInRecord: rows.length,
+    SU:  count(r => r.Tx != null && r.Tx >  25),
+    TR:  count(r => r.Tn != null && r.Tn >  20),
+    ID:  count(r => r.Tx != null && r.Tx <  0),
+    FD:  count(r => r.Tn != null && r.Tn <  0),
+    R10: count(r => r.RR != null && r.RR >= 10),
+    R20: count(r => r.RR != null && r.RR >= 20),
+    note: targetYear === curYear ? `Partial year to ${curDate}` : 'Full year',
+  }
+}
+
 function checkAccess() {
   return new URLSearchParams(window.location.search).get('token') === INVITE_TOKEN
 }
@@ -140,7 +193,10 @@ export default function App() {
         return acc
       }, {})
 
-      // 5. On-demand exceedance: detect threshold questions not in pre-computed table.
+      // 5. ETCCDI index queries for a specific year / month+year (computed from dayIndex)
+      const etccdiSlice = detectAndComputeEtccdi(text, dayIndex, today)
+
+      // 6. On-demand exceedance: detect threshold questions not in pre-computed table.
       //    Extracts field, threshold, direction and month from the question text,
       //    computes the exceedance % per era in the browser, and sends only the result.
       const exceedanceSlice = detectAndComputeExceedance(text, mfIndex)
@@ -148,7 +204,7 @@ export default function App() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, recentRows, exceedanceSlice, today, history: messages, token }),
+        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, recentRows, exceedanceSlice, etccdiSlice, today, history: messages, token }),
       })
       if (!res.ok) throw new Error(await res.text())
       const { answer } = await res.json()

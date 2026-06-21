@@ -10,6 +10,8 @@ When comparing any value to "average" or "normal", always use the wmoNormals sec
 
 Answer concisely and directly using only the data provided. Use **bold** for key values and dates. Use bullet lists or short tables for comparisons and rankings. Do not invent values or add lengthy meteorological theory — just tell the user what the data shows at Reading.
 
+**WMO ETCCDI climate indices:** The context includes \`etccdiNormals\` (mean annual counts per climate era) and per-year counts in \`byYear\`, plus per-calendar-month top-10s in \`monthlyTopTens\` (mostSummerDays, mostTropNights). Indices: SU = Summer Days (Tx > 25°C), TR = Tropical Nights (Tn > 20°C), ID = Ice Days (Tx < 0°C), FD = Frost Days (Tn < 0°C), R10 = Heavy Rain Days (RR ≥ 10mm), R20 = Very Heavy Rain Days (RR ≥ 20mm). These are the internationally agreed ETCCDI standard. For questions about a specific year or partial year ("this year so far", "in June 2023"), an \`etccdiSlice\` with exact computed counts will be provided — use it directly and compare against \`etccdiNormals\` for context.
+
 **Heatwaves:** The context includes a \`heatwaves\` section with all individual heatwave events in the record (UK Met Office SE England definition: Tx ≥ 28°C for ≥ 3 consecutive days). Each event has start date, end date, duration in days, peak Tx, and mean Tx. The section also includes \`longestEvent\`, \`hottestEvent\`, \`byDecade\` counts, \`byYear\` counts (sparse — only years with at least one heatwave), and \`gapStats\` (shortest/longest/mean gap in days between consecutive heatwaves). Use this for questions about heatwave frequency, trends, the hottest or longest heatwave, how many heatwaves occurred in a given year or decade, and how long the typical wait between heatwaves is.
 
 **Exceedance probabilities and climatological chance questions:**
@@ -146,7 +148,7 @@ async function callWithRetry(messages, maxAttempts = 3) {
 export default async function handler(req) {
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
 
-  const { question, context, dailyRows, calendarSlices, recentRows, exceedanceSlice, today, history, token } = await req.json()
+  const { question, context, dailyRows, calendarSlices, recentRows, exceedanceSlice, etccdiSlice, today, history, token } = await req.json()
 
   if (token !== process.env.INVITE_TOKEN) return new Response('Unauthorized', { status: 401 })
   if (!question || !context) return new Response('Missing question or context', { status: 400 })
@@ -163,6 +165,8 @@ export default async function handler(req) {
     dataContext.push(`Daily records for the recent period requested (${recentRows.length} days, chronological):\n${JSON.stringify(recentRows)}`)
   if (exceedanceSlice)
     dataContext.push(`On-demand exceedance computation for this query (computed from full daily record in the browser):\n${JSON.stringify(exceedanceSlice)}\nUse these figures directly in your answer — state the era and sample size (n).`)
+  if (etccdiSlice)
+    dataContext.push(`WMO ETCCDI index counts for the period specified in this query (computed from full daily record in the browser):\n${JSON.stringify(etccdiSlice)}\nUse these figures directly. SU=Summer Days (Tx>25°C), TR=Tropical Nights (Tn>20°C), ID=Ice Days (Tx<0°C), FD=Frost Days (Tn<0°C), R10=Heavy Rain Days (≥10mm), R20=Very Heavy Rain Days (≥20mm).`)
 
   // Build full message list: context preamble + capped history + current question
   const recentHistory = (history || []).slice(-20)

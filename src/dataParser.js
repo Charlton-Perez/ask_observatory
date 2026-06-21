@@ -231,6 +231,16 @@ export function buildContext(rows) {
       if (v !== null) allDays[f].push({ date: d, value: v })
     }
 
+    // ETCCDI day counts — one pass, no field-loop duplication
+    const etTx = num(row.Tx), etTn = num(row.Tn), etRr = num(row.RR)
+    if (!annual[year]._et) annual[year]._et = { SU:0, TR:0, ID:0, FD:0, R10:0, R20:0 }
+    if (!monthYear[myKey]._et) monthYear[myKey]._et = { SU:0, TR:0, ID:0, FD:0, R10:0, R20:0 }
+    for (const et of [annual[year]._et, monthYear[myKey]._et]) {
+      if (etTx !== null) { if (etTx > 25) et.SU++; if (etTx < 0) et.ID++ }
+      if (etTn !== null) { if (etTn > 20) et.TR++; if (etTn < 0) et.FD++ }
+      if (etRr !== null) { if (etRr >= 10) et.R10++; if (etRr >= 20) et.R20++ }
+    }
+
     // WMO normals — only accumulate rows in the active 30-year period
     if (year >= wmoPeriod.start && year <= wmoPeriod.end) {
       const nb = normalsRaw[month - 1]
@@ -300,12 +310,29 @@ export function buildContext(rows) {
 
   // Keep per-year just for Tx_max and Tn_min — useful for "warmest year" questions
   // but much smaller than the full annual breakdown.
+  const ETCCDI_KEYS = ['SU','TR','ID','FD','R10','R20']
   const byYear = Object.entries(annual).sort(([a], [b]) => a - b).map(([year, fields]) => ({
     year: parseInt(year),
     Tx_max: max(fields.Tx),
     Tn_min: min(fields.Tn),
     RR_total: total(fields.RR),
     sss_total: total(fields.sss),
+    ...(fields._et || {}),
+  }))
+
+  // ETCCDI normals — mean annual index counts per climate era
+  const etEras = [
+    { key: 'all',       start: 1800, end: 9999 },
+    { key: '1961-1990', start: 1961, end: 1990 },
+    { key: '1991-2020', start: 1991, end: 2020 },
+    { key: '2001-now',  start: 2001, end: 9999 },
+  ]
+  const etccdiNormals = Object.fromEntries(etEras.map(era => {
+    const sub = byYear.filter(y => y.year >= era.start && y.year <= era.end && ETCCDI_KEYS.some(k => y[k] != null))
+    const vals = Object.fromEntries(ETCCDI_KEYS.map(k =>
+      [k, sub.length ? mean(sub.map(y => y[k] ?? 0)) : null]
+    ))
+    return [era.key, { ...vals, n: sub.length }]
   }))
 
   // ── Per-calendar-month top-10s ───────────────────────────────────────────────
@@ -323,13 +350,15 @@ export function buildContext(rows) {
 
     monthlyTopTens[mo] = {
       name: MONTH_NAMES[mo - 1],
-      hottestMonths:  rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tx) }))),
-      coldestMonths:  rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tn) })), false),
-      wettestMonths:  rank(entries.map(e => ({ year: e.year, value: total(e.values.RR) }))),
-      driestMonths:   rank(entries.map(e => ({ year: e.year, value: total(e.values.RR) })), false),
-      sunniestMonths: rank(entries.map(e => ({ year: e.year, value: total(e.values.sss) }))),
-      gloomyMonths:   rank(entries.map(e => ({ year: e.year, value: total(e.values.sss) })), false),
-      mostFrostDays:  rank(entries.map(e => ({ year: e.year, value: e.af }))),
+      hottestMonths:   rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tx) }))),
+      coldestMonths:   rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tn) })), false),
+      wettestMonths:   rank(entries.map(e => ({ year: e.year, value: total(e.values.RR) }))),
+      driestMonths:    rank(entries.map(e => ({ year: e.year, value: total(e.values.RR) })), false),
+      sunniestMonths:  rank(entries.map(e => ({ year: e.year, value: total(e.values.sss) }))),
+      gloomyMonths:    rank(entries.map(e => ({ year: e.year, value: total(e.values.sss) })), false),
+      mostFrostDays:   rank(entries.map(e => ({ year: e.year, value: e.af }))),
+      mostSummerDays:  rank(entries.map(e => ({ year: e.year, value: e._et?.SU ?? 0 }))),
+      mostTropNights:  rank(entries.map(e => ({ year: e.year, value: e._et?.TR ?? 0 }))),
     }
   }
 
@@ -486,6 +515,7 @@ export function buildContext(rows) {
     seasonalTopTens,
     longestRuns: computeRuns(rows),
     heatwaves: computeHeatwaves(rows),
+    etccdiNormals,
     monthlyExceedance,
     byMonth,
     byDecade,
