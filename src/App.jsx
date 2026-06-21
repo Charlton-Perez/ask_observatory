@@ -79,8 +79,17 @@ function detectAndComputeExceedance(question, mfIndex, dayIndex, today) {
 
   const wantsCurrentPeriod = thisYearQ || thisMonthQ || allYears.length > 0
 
-  // Pre-computed + no current-period request → already in context, skip
-  if (isPreComputed && !wantsCurrentPeriod) return null
+  // Pre-computed + no current period + month named → monthly % already in context, skip
+  if (isPreComputed && !wantsCurrentPeriod && namedMonth) return null
+
+  // Pre-computed + no current period + no month → "how many days typically per year?" type question.
+  // Monthly % alone leads Claude to wrong arithmetic; return annual day counts directly.
+  if (isPreComputed && !wantsCurrentPeriod && !namedMonth) {
+    return {
+      ...computeAnnualExceedanceCounts(mfIndex, field, threshold, dir, null, null),
+      note: 'Monthly exceedance percentages are also available in the monthlyExceedance context for month-level breakdown.',
+    }
+  }
 
   const result = { type: 'threshold_query', field, threshold, dir }
 
