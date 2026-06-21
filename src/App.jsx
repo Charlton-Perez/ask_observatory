@@ -77,7 +77,7 @@ function detectAndComputeExceedance(question, mfIndex) {
 // Detect ETCCDI index queries for a specific year or month+year and compute
 // counts from dayIndex in the browser. Covers "this year so far", "in 2023",
 // "in June 2023" without sending raw rows to the API.
-const ETCCDI_TERMS = /\b(summer days?|tropical nights?|frost days?|ice days?|heavy rain days?|SU\b|TR\b|FD\b|ID\b|R10|R20|warm days?|hot days?|heatwave days?)\b/i
+const ETCCDI_TERMS = /\b(summer days?|tropical nights?|frost days?|ice days?|heavy rain days?|SU\b|TR\b|FD\b|ID\b|R10|R20|warm days?|hot days?)\b/i
 function detectAndComputeEtccdi(question, dayIndex, today) {
   if (!dayIndex) return null
   if (!ETCCDI_TERMS.test(question)) return null
