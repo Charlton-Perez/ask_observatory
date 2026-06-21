@@ -115,15 +115,28 @@ function detectAndComputeExceedance(question, mfIndex, dayIndex, today) {
       if (scopeYear === curYear && r.date > today) return false
       return true
     })
-    const hit = rows.filter(r => {
+    const matchRows = rows.filter(r => {
       const v = r[field]; return v != null && (dir === '>=' ? v >= threshold : v < threshold)
-    }).length
+    }).sort((a, b) => a.date.localeCompare(b.date))
     const monthLabel = scopeMonth ? `${MONTH_NAMES_APP[scopeMonth - 1]} ` : ''
     const partial    = scopeYear === curYear ? ` (to ${today})` : ''
+
+    // Per-month breakdown — prevents Claude from attributing May events to June context
+    const byMonth = {}
+    for (const r of matchRows) {
+      const mName = MONTH_NAMES_APP[parseInt(r.date.slice(5, 7)) - 1]
+      byMonth[mName] = (byMonth[mName] || 0) + 1
+    }
+
     result.currentPeriod = {
       scope: `${monthLabel}${scopeYear}${partial}`,
       daysInRecord: rows.length,
-      count: hit,
+      count: matchRows.length,
+      byMonth,
+      // Include actual dates when count is small enough to list sensibly
+      ...(matchRows.length <= 20 && {
+        matchingDays: matchRows.map(r => ({ date: r.date, [field]: r[field] })),
+      }),
     }
   }
 
