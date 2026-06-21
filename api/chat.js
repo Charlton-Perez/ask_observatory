@@ -186,8 +186,11 @@ export default async function handler(req) {
     return new Response(JSON.stringify({ answer }), { headers: { 'Content-Type': 'application/json' } })
   } catch (err) {
     console.error('Model error:', err.message)
-    const friendly = (err.message || '').toLowerCase().includes('overload')
+    const msg = (err.message || '').toLowerCase()
+    const friendly = msg.includes('overload')
       ? 'The AI service is busy right now — please try again in a moment.'
+      : msg.includes('rate_limit') || msg.includes('rate limit')
+      ? 'We\'ve hit the usage limit for this minute — please wait a few seconds and try again.'
       : `Something went wrong: ${err.message}`
     return new Response(JSON.stringify({ answer: friendly }), { headers: { 'Content-Type': 'application/json' } })
   }
