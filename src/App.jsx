@@ -246,10 +246,15 @@ export default function App() {
       //    computes the exceedance % per era in the browser, and sends only the result.
       const exceedanceSlice = detectAndComputeExceedance(text, mfIndex, dayIndex, today)
 
+      // If exceedanceSlice has a currentPeriod count, suppress recentRows for the same
+      // window — sending raw rows alongside a pre-computed count causes Claude to recount
+      // and get confused when rows near the threshold appear but don't qualify.
+      const finalRecentRows = exceedanceSlice?.currentPeriod ? [] : recentRows
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, recentRows, exceedanceSlice, etccdiSlice, today, history: messages, token }),
+        body: JSON.stringify({ question: text, context, dailyRows, calendarSlices, recentRows: finalRecentRows, exceedanceSlice, etccdiSlice, today, history: messages, token }),
       })
       if (!res.ok) throw new Error(await res.text())
       const { answer } = await res.json()
