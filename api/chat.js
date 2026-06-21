@@ -164,7 +164,7 @@ export default async function handler(req) {
   if (recentRows?.length > 0)
     dataContext.push(`Daily records for the recent period requested (${recentRows.length} days, chronological):\n${JSON.stringify(recentRows)}`)
   if (exceedanceSlice)
-    dataContext.push(`On-demand threshold computation for this query (computed from full daily record in the browser):\n${JSON.stringify(exceedanceSlice)}\nThe result may contain: 'historical' (climatological background — % per era for a month, or per-year counts), 'currentPeriod' (actual count for the specific year/month requested, with daysInRecord and count), or both. Use all provided figures directly. When both are present, compare currentPeriod.count against historical norms and state the scope clearly.`)
+    dataContext.push(`On-demand threshold computation for this query (computed from full daily record in the browser):\n${JSON.stringify(exceedanceSlice)}\nIMPORTANT: The 'currentPeriod.count' value is the authoritative pre-computed answer — use it directly and do NOT recount from any other data. Thresholds are always inclusive (≥ for warm/wet, < for cold/frost), so "warmer than 30°C" = Tx ≥ 30°C. The result may also contain 'historical' (climatological background by era) for comparison context.`)
   if (etccdiSlice)
     dataContext.push(`WMO ETCCDI index counts for the period specified in this query (computed from full daily record in the browser):\n${JSON.stringify(etccdiSlice)}\nUse these figures directly. SU=Summer Days (Tx>25°C), TR=Tropical Nights (Tn>20°C), ID=Ice Days (Tx<0°C), FD=Frost Days (Tn<0°C), R10=Heavy Rain Days (≥10mm), R20=Very Heavy Rain Days (≥20mm).`)
 

@@ -51,9 +51,15 @@ function detectAndComputeExceedance(question, mfIndex, dayIndex, today) {
   const threshold = parseFloat(threshM[1])
   if (threshold < -50 || threshold > 60) return null
 
+  // "colder/cooler than" or "below/under" → Tn, direction <
+  // Everything else → Tx, direction >=
+  // Note: "warmer/hotter than X" and "above X" are treated as >= X (inclusive),
+  // matching common meteorological and public usage.
   let field, dir
-  if (/\b(min|minimum|night|overnight|tn|frost)\b/.test(q) || /\b(below|under)\b/.test(q)) {
-    field = 'Tn'; dir = threshold <= 5 ? '<' : '>='
+  if (/\b(min|minimum|night|overnight|tn)\b/.test(q) ||
+      /\b(colder than|cooler than|below|under)\b/.test(q) ||
+      (/\bfrost\b/.test(q) && threshold <= 5)) {
+    field = 'Tn'; dir = '<'
   } else {
     field = 'Tx'; dir = '>='
   }
