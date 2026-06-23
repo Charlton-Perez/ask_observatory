@@ -178,6 +178,17 @@ export function buildContext(rows) {
     RR: [], sss: [], ff_ms: [], af: 0, gf: 0, rd: 0, n: 0,
   }))
 
+  // Era × month accumulators for climate change comparisons (mean Tx/Tn/RR/sss by era)
+  const ERA_DEFS_CTX = [
+    { key: 'all',       start: 1800, end: 9999 },
+    { key: '1961-1990', start: 1961, end: 1990 },
+    { key: '1991-2020', start: 1991, end: 2020 },
+    { key: '2001-now',  start: 2001, end: 9999 },
+  ]
+  const eraMonthAcc = Object.fromEntries(ERA_DEFS_CTX.map(e => [
+    e.key, Array.from({ length: 12 }, () => ({ Tx: [], Tn: [], RR: [], sss: [] }))
+  ]))
+
   // All-day lists for ranking (only fields with a clear extreme direction)
   const rankable = FIELDS.filter(f => f.higher !== null)
   const allDays = Object.fromEntries(rankable.map(f => [f.key, []]))
@@ -250,6 +261,18 @@ export function buildContext(rows) {
       if (num(row.af) === 1) nb.af++
       if (num(row.gf) === 1) nb.gf++
       if (num(row.rd) === 1) nb.rd++
+    }
+
+    // Era × month accumulators for climate change comparisons
+    const txV = num(row.Tx), tnV = num(row.Tn), rrV = num(row.RR), sssV = num(row.sss)
+    for (const era of ERA_DEFS_CTX) {
+      if (year >= era.start && year <= era.end) {
+        const eb = eraMonthAcc[era.key][month - 1]
+        if (txV  !== null) eb.Tx.push(txV)
+        if (tnV  !== null) eb.Tn.push(tnV)
+        if (rrV  !== null) eb.RR.push(rrV)
+        if (sssV !== null) eb.sss.push(sssV)
+      }
     }
   }
 
@@ -506,6 +529,21 @@ export function buildContext(rows) {
     }
   })
 
+  // Era × month means for climate change comparison questions
+  // (e.g. "how has mean June maximum changed since 1961?")
+  const byMonthEra = Object.fromEntries(ERA_DEFS_CTX.map(era => [
+    era.key,
+    eraMonthAcc[era.key].map((eb, i) => ({
+      month: i + 1,
+      name: MONTH_NAMES[i],
+      meanTx:  mean(eb.Tx),
+      meanTn:  mean(eb.Tn),
+      // RR and sss as mean daily values — multiply by ~30 for rough monthly total
+      meanDailyRR:  mean(eb.RR),
+      meanDailySss: mean(eb.sss),
+    })).filter(m => m.meanTx !== null)
+  ]))
+
   return {
     overview: { startDate, endDate, totalDays },
     wmoNormals: { period: wmoPeriod.label, byMonth: normals },
@@ -517,6 +555,7 @@ export function buildContext(rows) {
     heatwaves: computeHeatwaves(rows),
     etccdiNormals,
     monthlyExceedance,
+    byMonthEra,
     byMonth,
     byDecade,
     byYear,
