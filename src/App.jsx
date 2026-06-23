@@ -77,25 +77,31 @@ function detectAndComputeExceedance(question, mfIndex, dayIndex, today) {
   const monthM     = q.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/i)
   const namedMonth = monthM ? MONTH_MAP_APP[monthM[1].toLowerCase()] : null
 
-  const wantsCurrentPeriod = thisYearQ || thisMonthQ || allYears.length > 0
+  // Distinguish current-year requests from historical era/range queries
+  const wantsCurrentYear    = thisYearQ || thisMonthQ || allYears.includes(curYear)
+  const wantsHistoricalRange = !wantsCurrentYear && allYears.length > 0
 
-  // Pre-computed + no current period + month named → monthly % already in context, skip
-  if (isPreComputed && !wantsCurrentPeriod && namedMonth) return null
+  // Pre-computed + no time scope + month named → monthly % already in context
+  if (isPreComputed && !wantsCurrentYear && !wantsHistoricalRange && namedMonth) return null
 
-  // Pre-computed + no current period + no month → "how many days typically per year?" type question.
-  // Monthly % alone leads Claude to wrong arithmetic; return annual day counts directly.
-  if (isPreComputed && !wantsCurrentPeriod && !namedMonth) {
+  // Pre-computed + no time scope + no month → return annual counts with era means
+  if (isPreComputed && !wantsCurrentYear && !wantsHistoricalRange && !namedMonth) {
     return {
       ...computeAnnualExceedanceCounts(mfIndex, field, threshold, dir, null, null),
-      note: 'Monthly exceedance percentages are also available in the monthlyExceedance context for month-level breakdown.',
+      note: 'Monthly exceedance percentages are also in the monthlyExceedance context.',
     }
   }
 
   const result = { type: 'threshold_query', field, threshold, dir }
 
-  // Historical background (skip if pre-computed — already in monthlyExceedance context)
-  if (!isPreComputed) {
-    const histYears = allYears.filter(y => !(thisYearQ && y === curYear))
+  // Historical background
+  if (wantsHistoricalRange) {
+    // User specified historical years/era — compute counts for that range with era means
+    result.historical = computeAnnualExceedanceCounts(
+      mfIndex, field, threshold, dir, Math.min(...allYears), Math.max(...allYears)
+    )
+  } else if (!isPreComputed) {
+    const histYears = allYears.filter(y => y !== curYear)
     if (namedMonth && !thisMonthQ) {
       result.historical = computeMonthExceedance(mfIndex, namedMonth, field, threshold, dir)
     } else if (!namedMonth) {
@@ -107,12 +113,10 @@ function detectAndComputeExceedance(question, mfIndex, dayIndex, today) {
     result.historicalNote = `Historical exceedance data for ${field}${dir}${threshold} is in the monthlyExceedance context.`
   }
 
-  // Current-period actual count — computed from dayIndex when a specific period is requested
-  if (wantsCurrentPeriod && dayIndex) {
-    const scopeYear  = thisYearQ ? curYear
-                     : allYears.length === 1 ? allYears[0]
-                     : allYears.length > 1  ? Math.max(...allYears)
-                     : curYear
+  // Current-period count — only when current year/month is explicitly requested
+  if (wantsCurrentYear && dayIndex) {
+    const scopeYear = thisYearQ || thisMonthQ ? curYear
+                    : allYears.find(y => y === curYear) || curYear
     const scopeMonth = thisMonthQ ? curMonth : namedMonth
 
     const rows = Object.values(dayIndex).filter(r => {

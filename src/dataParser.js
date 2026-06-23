@@ -663,12 +663,28 @@ export function computeAnnualExceedanceCounts(monthFieldIndex, field, threshold,
     if (dir === '>=' ? value >= threshold : value < threshold) yearMap[year]++
   }
   const byYear = Object.entries(yearMap).sort(([a],[b]) => a - b).map(([y, days]) => ({ year: parseInt(y), days }))
+
+  // Pre-compute era means so Claude doesn't have to average raw byYear data
+  const ERA_DEFS = [
+    { key: 'all',       start: 1800, end: 9999 },
+    { key: '1961-1990', start: 1961, end: 1990 },
+    { key: '1991-2020', start: 1991, end: 2020 },
+    { key: '2001-now',  start: 2001, end: 9999 },
+  ]
+  const byEra = {}
+  for (const era of ERA_DEFS) {
+    const sub = byYear.filter(y => y.year >= era.start && y.year <= era.end)
+    if (sub.length >= 5)
+      byEra[era.key] = { meanDaysPerYear: +(sub.reduce((s, y) => s + y.days, 0) / sub.length).toFixed(1), n: sub.length }
+  }
+
   return {
     type: 'annual_counts',
     field, threshold, dir,
     description: `${field} ${dir} ${threshold}°C`,
     yearRange: startYear != null ? `${startYear}–${endYear}` : 'full record',
     totalDays: byYear.reduce((s, y) => s + y.days, 0),
+    byEra,
     byYear,
   }
 }
