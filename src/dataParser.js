@@ -226,7 +226,7 @@ export function buildContext(rows) {
     if (!monthYear[myKey]) monthYear[myKey] = {
       label: `${MONTH_NAMES[month - 1]} ${year}`,
       values: Object.fromEntries(FIELDS.map(f => [f.key, []])),
-      af: 0, gf: 0,
+      af: 0, gf: 0, Tmean: [],
     }
     for (const { key: f } of FIELDS) {
       const v = num(row[f])
@@ -235,6 +235,9 @@ export function buildContext(rows) {
       else if (f === 'gf') { if (v === 1) monthYear[myKey].gf++ }
       else monthYear[myKey].values[f].push(v)
     }
+    // Daily mean temperature (Tx+Tn)/2 — tracked separately as it needs paired values
+    const txV = num(row.Tx), tnV = num(row.Tn)
+    if (txV !== null && tnV !== null) monthYear[myKey].Tmean.push((txV + tnV) / 2)
 
     // Rankable all-day lists
     for (const { key: f } of rankable) {
@@ -264,7 +267,7 @@ export function buildContext(rows) {
     }
 
     // Era × month accumulators for climate change comparisons
-    const txV = num(row.Tx), tnV = num(row.Tn), rrV = num(row.RR), sssV = num(row.sss)
+    const rrV = num(row.RR), sssV = num(row.sss)
     for (const era of ERA_DEFS_CTX) {
       if (year >= era.start && year <= era.end) {
         const eb = eraMonthAcc[era.key][month - 1]
@@ -329,6 +332,8 @@ export function buildContext(rows) {
     out.Tx_max = max(fields.Tx)
     out.Tn_max = max(fields.Tn)
     out.Tn_min = min(fields.Tn)
+    if (out.Tx_mean !== null && out.Tn_mean !== null)
+      out.Tmean_mean = +((out.Tx_mean + out.Tn_mean) / 2).toFixed(2)
     return out
   })
 
@@ -338,12 +343,14 @@ export function buildContext(rows) {
   const byYear = Object.entries(annual).sort(([a], [b]) => a - b).map(([year, fields]) => ({
     year: parseInt(year),
     Tx_max: max(fields.Tx),
+    Tx_mean: mean(fields.Tx),
     Tn_max: max(fields.Tn),
     Tn_min: min(fields.Tn),
+    Tn_mean: mean(fields.Tn),
     RR_total: total(fields.RR),
     sss_total: total(fields.sss),
     ...(fields._et || {}),
-  }))
+  })).map(y => ({ ...y, Tmean: (y.Tx_mean !== null && y.Tn_mean !== null) ? +((y.Tx_mean + y.Tn_mean) / 2).toFixed(2) : null }))
 
   // ETCCDI normals — mean annual index counts per climate era
   const etEras = [
@@ -376,13 +383,19 @@ export function buildContext(rows) {
     monthlyTopTens[mo] = {
       name: MONTH_NAMES[mo - 1],
       hottestMonths:   rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tx) }))),
+      hottestDays:     rank(entries.map(e => ({ year: e.year, value: max(e.values.Tx) }))),
       coldestMonths:   rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tn) })), false),
+      coldestDays:     rank(entries.map(e => ({ year: e.year, value: min(e.values.Tx) })), false),
       warmestMonths:   rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tn) }))),
       warmestNights:   rank(entries.map(e => ({ year: e.year, value: max(e.values.Tn) }))),
       coldestNights:   rank(entries.map(e => ({ year: e.year, value: min(e.values.Tn) })), false),
+      warmestMeanTemp: rank(entries.map(e => ({ year: e.year, value: mean(e.Tmean) }))),
+      coldestMeanTemp: rank(entries.map(e => ({ year: e.year, value: mean(e.Tmean) })), false),
       wettestMonths:   rank(entries.map(e => ({ year: e.year, value: total(e.values.RR) }))),
+      wettestDays:     rank(entries.map(e => ({ year: e.year, value: max(e.values.RR) }))),
       driestMonths:    rank(entries.map(e => ({ year: e.year, value: total(e.values.RR) })), false),
       sunniestMonths:  rank(entries.map(e => ({ year: e.year, value: total(e.values.sss) }))),
+      sunniestDays:    rank(entries.map(e => ({ year: e.year, value: max(e.values.sss) }))),
       gloomyMonths:    rank(entries.map(e => ({ year: e.year, value: total(e.values.sss) })), false),
       mostFrostDays:   rank(entries.map(e => ({ year: e.year, value: e.af }))),
       mostSummerDays:  rank(entries.map(e => ({ year: e.year, value: e._et?.SU ?? 0 }))),
@@ -411,13 +424,14 @@ export function buildContext(rows) {
       if (!seasonMap[sKey]) seasonMap[sKey] = {
         season: sName, year: seasonYear,
         values: Object.fromEntries(FIELDS.map(f => [f.key, []])),
-        af: 0, gf: 0,
+        af: 0, gf: 0, Tmean: [],
       }
       for (const { key: f } of FIELDS) {
         if (f === 'af') seasonMap[sKey].af += mv.af
         else if (f === 'gf') seasonMap[sKey].gf += mv.gf
         else seasonMap[sKey].values[f].push(...mv.values[f])
       }
+      seasonMap[sKey].Tmean.push(...mv.Tmean)
     }
   }
 
@@ -425,13 +439,16 @@ export function buildContext(rows) {
   for (const sName of Object.keys(SEASONS)) {
     const entries = Object.values(seasonMap).filter(e => e.season === sName)
     seasonalTopTens[sName] = {
-      hottestSeasons:  rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tx) }))),
-      coldestSeasons:  rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tn) })), false),
-      warmestSeasons:  rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tn) }))),
-      wettestSeasons:  rank(entries.map(e => ({ year: e.year, value: total(e.values.RR) }))),
-      driestSeasons:   rank(entries.map(e => ({ year: e.year, value: total(e.values.RR) })), false),
-      sunniestSeasons: rank(entries.map(e => ({ year: e.year, value: total(e.values.sss) }))),
-      mostFrostDays:   rank(entries.map(e => ({ year: e.year, value: e.af }))),
+      hottestSeasons:     rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tx) }))),
+      coldestSeasons:     rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tn) })), false),
+      warmestSeasons:     rank(entries.map(e => ({ year: e.year, value: mean(e.values.Tn) }))),
+      warmestMeanSeasons: rank(entries.map(e => ({ year: e.year, value: mean(e.Tmean) }))),
+      coldestMeanSeasons: rank(entries.map(e => ({ year: e.year, value: mean(e.Tmean) })), false),
+      wettestSeasons:     rank(entries.map(e => ({ year: e.year, value: total(e.values.RR) }))),
+      driestSeasons:      rank(entries.map(e => ({ year: e.year, value: total(e.values.RR) })), false),
+      sunniestSeasons:    rank(entries.map(e => ({ year: e.year, value: total(e.values.sss) }))),
+      dullestSeasons:     rank(entries.map(e => ({ year: e.year, value: total(e.values.sss) })), false),
+      mostFrostDays:      rank(entries.map(e => ({ year: e.year, value: e.af }))),
     }
   }
 
@@ -439,9 +456,15 @@ export function buildContext(rows) {
   const allMyEntries = Object.entries(monthYear)
   const recordMonths = {
     hottestMonth:         allMyEntries.map(([k,v]) => ({ label: v.label, value: mean(v.values.Tx) })).filter(e=>e.value!==null).sort((a,b)=>b.value-a.value)[0],
+    hottestDay:           allMyEntries.map(([k,v]) => ({ label: v.label, value: max(v.values.Tx) })).filter(e=>e.value!==null).sort((a,b)=>b.value-a.value)[0],
     coldestMonth:         allMyEntries.map(([k,v]) => ({ label: v.label, value: mean(v.values.Tn) })).filter(e=>e.value!==null).sort((a,b)=>a.value-b.value)[0],
+    coldestDay:           allMyEntries.map(([k,v]) => ({ label: v.label, value: min(v.values.Tx) })).filter(e=>e.value!==null).sort((a,b)=>a.value-b.value)[0],
     warmestMonth:         allMyEntries.map(([k,v]) => ({ label: v.label, value: mean(v.values.Tn) })).filter(e=>e.value!==null).sort((a,b)=>b.value-a.value)[0],
     warmestNight:         allMyEntries.map(([k,v]) => ({ label: v.label, value: max(v.values.Tn) })).filter(e=>e.value!==null).sort((a,b)=>b.value-a.value)[0],
+    warmestMeanMonth:     allMyEntries.map(([k,v]) => ({ label: v.label, value: mean(v.Tmean) })).filter(e=>e.value!==null).sort((a,b)=>b.value-a.value)[0],
+    coldestMeanMonth:     allMyEntries.map(([k,v]) => ({ label: v.label, value: mean(v.Tmean) })).filter(e=>e.value!==null).sort((a,b)=>a.value-b.value)[0],
+    wettestDay:           allMyEntries.map(([k,v]) => ({ label: v.label, value: max(v.values.RR) })).filter(e=>e.value!==null).sort((a,b)=>b.value-a.value)[0],
+    sunniestDay:          allMyEntries.map(([k,v]) => ({ label: v.label, value: max(v.values.sss) })).filter(e=>e.value!==null).sort((a,b)=>b.value-a.value)[0],
     wettestMonth:         allMyEntries.map(([k,v]) => ({ label: v.label, value: total(v.values.RR) })).filter(e=>e.value!==null).sort((a,b)=>b.value-a.value)[0],
     driestMonth:          allMyEntries.map(([k,v]) => ({ label: v.label, value: total(v.values.RR) })).filter(e=>e.value!==null&&e.value>=0).sort((a,b)=>a.value-b.value)[0],
     sunniestMonth:        allMyEntries.map(([k,v]) => ({ label: v.label, value: total(v.values.sss) })).filter(e=>e.value!==null).sort((a,b)=>b.value-a.value)[0],
