@@ -838,21 +838,45 @@ export function extractRecentDays(question) {
   return null
 }
 
-// Detect explicit date ranges: "from X to Y", "between X and Y", "X to Y", "X through Y"
+const MONTH_NAME_RE = 'january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec'
+const MONTH_NAME_MAP = {
+  january:1,february:2,march:3,april:4,may:5,june:6,
+  july:7,august:8,september:9,october:10,november:11,december:12,
+  jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12,
+}
+
+// Detect explicit date ranges or a single month+year.
 // Returns { start: "YYYY-MM-DD", end: "YYYY-MM-DD" } or null.
 export function extractDateRange(question) {
-  // Try to find two parseable dates with a range connector between them
-  const connectors = /\s+(?:to|through|until|–|—|-|and)\s+/i
-  const rangePat = /\b((?:\d{1,2}(?:st|nd|rd|th)?\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s*\d{0,4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})\s+(?:to|through|until|–|—)\s+((?:\d{1,2}(?:st|nd|rd|th)?\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s*\d{0,4}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2})\b/i
-
-  // Parse the two dates from extractDates applied to just those substrings
+  const rangePat = new RegExp(
+    `\\b((?:\\d{1,2}(?:st|nd|rd|th)?\\s+)?(?:${MONTH_NAME_RE})\\s*\\d{0,4}|\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{4}|\\d{4}[\\/\\-]\\d{1,2}[\\/\\-]\\d{1,2})\\s+(?:to|through|until|–|—)\\s+((?:\\d{1,2}(?:st|nd|rd|th)?\\s+)?(?:${MONTH_NAME_RE})\\s*\\d{0,4}|\\d{1,2}[\\/\\-]\\d{1,2}[\\/\\-]\\d{4}|\\d{4}[\\/\\-]\\d{1,2}[\\/\\-]\\d{1,2})\\b`, 'i'
+  )
   const m = question.match(rangePat)
-  if (!m) return null
-  const d1 = extractDates(m[1])
-  const d2 = extractDates(m[2])
-  if (!d1.specificDates.length || !d2.specificDates.length) return null
-  const [start, end] = [d1.specificDates[0], d2.specificDates[0]].sort()
-  return { start, end }
+  if (m) {
+    const d1 = extractDates(m[1])
+    const d2 = extractDates(m[2])
+    if (d1.specificDates.length && d2.specificDates.length) {
+      const [start, end] = [d1.specificDates[0], d2.specificDates[0]].sort()
+      return { start, end }
+    }
+  }
+
+  // Single month + year (e.g. "August 2003", "the July 2022 heatwave")
+  const myM = question.match(new RegExp(`\\b(${MONTH_NAME_RE})\\s+((?:19|20)\\d{2})\\b`, 'i'))
+    || question.match(new RegExp(`\\b((?:19|20)\\d{2})\\s+(${MONTH_NAME_RE})\\b`, 'i'))
+  if (myM) {
+    const monStr = (myM[1].match(/\d/) ? myM[2] : myM[1]).toLowerCase()
+    const year   = parseInt(myM[1].match(/\d/) ? myM[1] : myM[2])
+    const month  = MONTH_NAME_MAP[monStr]
+    if (month && year) {
+      const pad = n => String(n).padStart(2, '0')
+      const start = `${year}-${pad(month)}-01`
+      const end   = `${year}-${pad(month)}-${pad(new Date(year, month, 0).getDate())}`
+      return { start, end }
+    }
+  }
+
+  return null
 }
 
 // Return all rows between two dates (inclusive), in chronological order.
