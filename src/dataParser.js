@@ -192,6 +192,7 @@ export function buildContext(rows) {
   // All-day lists for ranking (only fields with a clear extreme direction)
   const rankable = FIELDS.filter(f => f.higher !== null)
   const allDays = Object.fromEntries(rankable.map(f => [f.key, []]))
+  allDays.Tmean = []  // daily mean (Tx+Tn)/2 — not a raw field, tracked separately
 
   let startDate = null, endDate = null, totalDays = 0
 
@@ -237,7 +238,11 @@ export function buildContext(rows) {
     }
     // Daily mean temperature (Tx+Tn)/2 — tracked separately as it needs paired values
     const txV = num(row.Tx), tnV = num(row.Tn)
-    if (txV !== null && tnV !== null) monthYear[myKey].Tmean.push((txV + tnV) / 2)
+    if (txV !== null && tnV !== null) {
+      const tmeanV = (txV + tnV) / 2
+      monthYear[myKey].Tmean.push(tmeanV)
+      allDays.Tmean.push({ date: d, value: +tmeanV.toFixed(2) })
+    }
 
     // Rankable all-day lists
     for (const { key: f } of rankable) {
@@ -295,6 +300,7 @@ export function buildContext(rows) {
     // Pressure and Tn both get both directions (highest/lowest pressure; warmest/coldest night)
     if (f === 'Pmsl' || f === 'Tn' || f === 'Tx') extremes[f] = { top20: top(allDays[f]), bottom20: bot(allDays[f]) }
   }
+  extremes.Tmean = { top20: top(allDays.Tmean), bottom20: bot(allDays.Tmean) }
 
   // Monthly summary
   const byMonth = monthly.map(m => {
