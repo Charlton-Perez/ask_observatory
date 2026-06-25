@@ -293,7 +293,7 @@ export function buildContext(rows) {
       ? { top20: top(allDays[f]) }
       : { bottom20: bot(allDays[f]) }
     // Pressure and Tn both get both directions (highest/lowest pressure; warmest/coldest night)
-    if (f === 'Pmsl' || f === 'Tn') extremes[f] = { top20: top(allDays[f]), bottom20: bot(allDays[f]) }
+    if (f === 'Pmsl' || f === 'Tn' || f === 'Tx') extremes[f] = { top20: top(allDays[f]), bottom20: bot(allDays[f]) }
   }
 
   // Monthly summary
