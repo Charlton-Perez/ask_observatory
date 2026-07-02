@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, buildMonthFieldIndex, computeMonthExceedance, computeAnnualExceedanceCounts, extractDates, extractRecentDays, extractDateRange, getRecentRows, getDateRangeRows } from './dataParser'
+import { parseCSV, buildContext, buildDayIndex, buildCalendarDayIndex, buildMonthFieldIndex, computeMonthExceedance, computeAnnualExceedanceCounts, countExceedanceInRange, extractDates, extractRecentDays, extractDateRange, getRecentRows, getDateRangeRows, MONTH_NAMES, MONTH_MAP, MONTH_NAME_RE } from './dataParser'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
@@ -15,22 +15,26 @@ const EXAMPLE_QUESTIONS = [
   'How many air frost days does January typically have?',
 ]
 
-const MONTH_MAP_APP = {
-  january:1,february:2,march:3,april:4,may:5,june:6,
-  july:7,august:8,september:9,october:10,november:11,december:12,
-  jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12,
-}
+const pad2 = n => String(n).padStart(2, '0')
+const lastDayOf = (year, month) => new Date(year, month, 0).getDate()
 
+// Thresholds whose monthly-% climatology is already pre-computed in buildContext's
+// monthlyExceedance table — for these, a named-month climatology query needs no slice.
 const PRE_COMPUTED_TX = [20, 25, 28, 30]
 const PRE_COMPUTED_TN = [0, 5]
 const PRE_COMPUTED_RR = [1, 5, 10]
-const MONTH_NAMES_APP = ['January','February','March','April','May','June','July','August','September','October','November','December']
 
-// Detect threshold/frequency questions and compute exceedance on the fly.
-// Returns a result combining:
-//   historical — climatological background (% per era for a month, or per-year counts)
-//   currentPeriod — actual count for "this year", "this month", or a specific year/month
-// Pre-computed thresholds skip historical (already in context) but still compute currentPeriod.
+// Detect threshold/frequency questions ("how many days above X …") and answer them
+// with code-computed numbers so Claude never tallies raw rows itself.
+//
+// The result always carries { field, threshold, dir }. Then exactly one of two shapes:
+//   • BOUNDED scope (a year, a month+year, a date range, or the current period):
+//       an authoritative `count` for that window, plus `byMonth`, optional
+//       `matchingDays`, and `climatology` (era means) for "compared to normal".
+//   • CLIMATOLOGY only (no concrete period): per-era monthly % (named month) or
+//       per-era annual day counts (whole year).
+// Returns null when the question isn't a threshold question, or when the answer is
+// already fully covered by the pre-computed monthlyExceedance context.
 function detectAndComputeExceedance(question, mfIndex, dayIndex, today) {
   if (!mfIndex) return null
   const q = question.toLowerCase()
@@ -52,9 +56,8 @@ function detectAndComputeExceedance(question, mfIndex, dayIndex, today) {
   if (threshold < -50 || threshold > 60) return null
 
   // "colder/cooler than" or "below/under" → Tn, direction <
-  // Everything else → Tx, direction >=
-  // Note: "warmer/hotter than X" and "above X" are treated as >= X (inclusive),
-  // matching common meteorological and public usage.
+  // Everything else → Tx, direction >=  (inclusive, matching common public usage of
+  // "warmer than 30" / "above 30" to mean 30 and above).
   let field, dir
   if (/\b(min|minimum|night|overnight|tn)\b/.test(q) ||
       /\b(colder than|cooler than|below|under)\b/.test(q) ||
@@ -68,92 +71,61 @@ function detectAndComputeExceedance(question, mfIndex, dayIndex, today) {
                         (field === 'Tn' && dir === '<'  && PRE_COMPUTED_TN.includes(threshold)) ||
                         (field === 'RR' && dir === '>=' && PRE_COMPUTED_RR.includes(threshold))
 
-  // Detect time scope indicators
+  // ── Determine the query scope ────────────────────────────────────────────────
   const thisYearQ  = /\b(this year|so far|year to date|ytd|current year|already this year)\b/.test(q)
   const thisMonthQ = /\b(this month|month to date|so far this month)\b/.test(q)
   const allYears   = [...question.matchAll(/\b((?:19|20)\d{2})\b/g)].map(m => parseInt(m[1]))
+  const monthM     = q.match(new RegExp(`\\b(${MONTH_NAME_RE})\\b`, 'i'))
+  const namedMonth = monthM ? MONTH_MAP[monthM[1].toLowerCase()] : null
+  const dateRange  = extractDateRange(question)   // explicit range OR month+year
 
-  // Named month in question
-  const monthM     = q.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/i)
-  const namedMonth = monthM ? MONTH_MAP_APP[monthM[1].toLowerCase()] : null
+  // Build a bounded [start, end] window if the question names a concrete period.
+  // notAfter caps partial current-year windows at today.
+  let scope = null
+  if (dateRange) {
+    scope = { start: dateRange.start, end: dateRange.end, label: `${dateRange.start} to ${dateRange.end}` }
+  } else if (thisMonthQ) {
+    scope = { start: `${curYear}-${pad2(curMonth)}-01`, end: today, notAfter: today,
+              label: `${MONTH_NAMES[curMonth - 1]} ${curYear} (to ${today})` }
+  } else if (thisYearQ) {
+    scope = { start: `${curYear}-01-01`, end: today, notAfter: today, label: `${curYear} (to ${today})` }
+  } else if (allYears.length) {
+    const y0 = Math.min(...allYears), y1 = Math.max(...allYears)
+    if (namedMonth && y0 === y1) {
+      scope = { start: `${y0}-${pad2(namedMonth)}-01`, end: `${y0}-${pad2(namedMonth)}-${pad2(lastDayOf(y0, namedMonth))}`,
+                notAfter: y0 === curYear ? today : null, label: `${MONTH_NAMES[namedMonth - 1]} ${y0}` }
+    } else {
+      scope = { start: `${y0}-01-01`, end: `${y1}-12-31`,
+                notAfter: y1 === curYear ? today : null, label: y0 === y1 ? `${y0}` : `${y0}–${y1}` }
+    }
+  }
 
-  // Distinguish current-year requests from historical era/range queries
-  const wantsCurrentYear    = thisYearQ || thisMonthQ || allYears.includes(curYear)
-  const wantsHistoricalRange = !wantsCurrentYear && allYears.length > 0
-
-  // Pre-computed + no time scope + month named → monthly % already in context
-  if (isPreComputed && !wantsCurrentYear && !wantsHistoricalRange && namedMonth) return null
-
-  // Pre-computed + no time scope + no month → return annual counts with era means
-  if (isPreComputed && !wantsCurrentYear && !wantsHistoricalRange && !namedMonth) {
+  // ── Bounded scope → authoritative code-computed count ────────────────────────
+  if (scope && dayIndex) {
+    const counted = countExceedanceInRange(dayIndex, field, threshold, dir, scope.start, scope.end, scope.notAfter)
     return {
-      ...computeAnnualExceedanceCounts(mfIndex, field, threshold, dir, null, null),
-      note: 'Monthly exceedance percentages are also in the monthlyExceedance context.',
+      type: 'threshold_count', field, threshold, dir,
+      scope: scope.label,
+      ...counted,
+      // Long-term context for "compared to normal" — era means only (no bulky per-year list).
+      climatology: namedMonth
+        ? computeMonthExceedance(mfIndex, namedMonth, field, threshold, dir)
+        : { byEra: computeAnnualExceedanceCounts(mfIndex, field, threshold, dir, null, null).byEra },
     }
   }
 
-  const result = { type: 'threshold_query', field, threshold, dir }
-
-  // Historical background
-  if (wantsHistoricalRange) {
-    // User specified historical years/era — compute counts for that range with era means
-    result.historical = computeAnnualExceedanceCounts(
-      mfIndex, field, threshold, dir, Math.min(...allYears), Math.max(...allYears)
-    )
-  } else if (!isPreComputed) {
-    const histYears = allYears.filter(y => y !== curYear)
-    if (namedMonth && !thisMonthQ) {
-      result.historical = computeMonthExceedance(mfIndex, namedMonth, field, threshold, dir)
-    } else if (!namedMonth) {
-      const sy = histYears.length ? Math.min(...histYears) : null
-      const ey = histYears.length ? Math.max(...histYears) : null
-      result.historical = computeAnnualExceedanceCounts(mfIndex, field, threshold, dir, sy, ey)
-    }
-  } else {
-    result.historicalNote = `Historical exceedance data for ${field}${dir}${threshold} is in the monthlyExceedance context.`
+  // ── Climatology only (no concrete period) ────────────────────────────────────
+  if (namedMonth) {
+    // Named calendar month, all years: percentage of days per era.
+    // Pre-computed thresholds are already in the monthlyExceedance context.
+    if (isPreComputed) return null
+    return computeMonthExceedance(mfIndex, namedMonth, field, threshold, dir)
   }
-
-  // Current-period count — only when current year/month is explicitly requested
-  if (wantsCurrentYear && dayIndex) {
-    const scopeYear = thisYearQ || thisMonthQ ? curYear
-                    : allYears.find(y => y === curYear) || curYear
-    const scopeMonth = thisMonthQ ? curMonth : namedMonth
-
-    const rows = Object.values(dayIndex).filter(r => {
-      if (!r.date) return false
-      const ry = parseInt(r.date.slice(0, 4))
-      const rm = parseInt(r.date.slice(5, 7))
-      if (ry !== scopeYear) return false
-      if (scopeMonth && rm !== scopeMonth) return false
-      if (scopeYear === curYear && r.date > today) return false
-      return true
-    })
-    const matchRows = rows.filter(r => {
-      const v = r[field]; return v != null && (dir === '>=' ? v >= threshold : v < threshold)
-    }).sort((a, b) => a.date.localeCompare(b.date))
-    const monthLabel = scopeMonth ? `${MONTH_NAMES_APP[scopeMonth - 1]} ` : ''
-    const partial    = scopeYear === curYear ? ` (to ${today})` : ''
-
-    // Per-month breakdown — prevents Claude from attributing May events to June context
-    const byMonth = {}
-    for (const r of matchRows) {
-      const mName = MONTH_NAMES_APP[parseInt(r.date.slice(5, 7)) - 1]
-      byMonth[mName] = (byMonth[mName] || 0) + 1
-    }
-
-    result.currentPeriod = {
-      scope: `${monthLabel}${scopeYear}${partial}`,
-      daysInRecord: rows.length,
-      count: matchRows.length,
-      byMonth,
-      // Include actual dates when count is small enough to list sensibly
-      ...(matchRows.length <= 20 && {
-        matchingDays: matchRows.map(r => ({ date: r.date, [field]: r[field] })),
-      }),
-    }
+  // Whole year, all years: mean days-per-year by era + full per-year list.
+  return {
+    ...computeAnnualExceedanceCounts(mfIndex, field, threshold, dir, null, null),
+    note: 'Monthly exceedance percentages are also in the monthlyExceedance context.',
   }
-
-  return result
 }
 
 // Detect ETCCDI index queries for a specific year or month+year and compute
@@ -168,44 +140,48 @@ function detectAndComputeEtccdi(question, dayIndex, today) {
   const curYear  = parseInt(today.slice(0, 4))
   const curDate  = today
 
-  // Detect target year
-  let targetYear = null
-  if (/\b(this year|so far|year to date|ytd|current year)\b/.test(q)) targetYear = curYear
-  else {
-    const ym = question.match(/\b((19|20)\d{2})\b/)
-    if (ym) targetYear = parseInt(ym[1])
+  // Detect target year(s) — a single year, a range ("2000 to 2010"), or the current year.
+  let startYear = null, endYear = null
+  if (/\b(this year|so far|year to date|ytd|current year)\b/.test(q)) {
+    startYear = endYear = curYear
+  } else {
+    const years = [...question.matchAll(/\b((?:19|20)\d{2})\b/g)].map(m => parseInt(m[1]))
+    if (years.length) { startYear = Math.min(...years); endYear = Math.max(...years) }
   }
-  if (!targetYear) return null
+  if (startYear == null) return null
 
-  // Detect optional target month
-  const monthM = q.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b/i)
-  const targetMonth = monthM ? MONTH_MAP_APP[monthM[1].toLowerCase()] : null
+  // Detect optional target month (only meaningful for a single year)
+  const monthM = q.match(new RegExp(`\\b(${MONTH_NAME_RE})\\b`, 'i'))
+  const targetMonth = (monthM && startYear === endYear) ? MONTH_MAP[monthM[1].toLowerCase()] : null
 
-  // Filter dayIndex
+  // Filter dayIndex to the requested window (capped at today for the current year)
   const rows = Object.values(dayIndex).filter(r => {
     if (!r.date) return false
     const y = parseInt(r.date.slice(0, 4))
     const m = parseInt(r.date.slice(5, 7))
-    if (y !== targetYear) return false
+    if (y < startYear || y > endYear) return false
     if (targetMonth && m !== targetMonth) return false
-    if (targetYear === curYear && r.date > curDate) return false  // exclude future
+    if (endYear === curYear && r.date > curDate) return false  // exclude future
     return true
   })
   if (!rows.length) return null
 
   const count = (fn) => rows.filter(fn).length
+  const yearsSpanned = endYear - startYear + 1
   return {
     type:       'etccdi_slice',
-    year:       targetYear,
-    month:      targetMonth || 'full year',
+    yearRange:  startYear === endYear ? `${startYear}` : `${startYear}–${endYear}`,
+    yearsSpanned,
+    month:      targetMonth ? MONTH_NAMES[targetMonth - 1] : 'full year',
     daysInRecord: rows.length,
+    // These are TOTALS across the whole window (not per-year). Divide by yearsSpanned for an annual average.
     SU:  count(r => r.Tx != null && r.Tx >  25),
     TR:  count(r => r.Tn != null && r.Tn >  20),
     ID:  count(r => r.Tx != null && r.Tx <  0),
     FD:  count(r => r.Tn != null && r.Tn <  0),
     R10: count(r => r.RR != null && r.RR >= 10),
     R20: count(r => r.RR != null && r.RR >= 20),
-    note: targetYear === curYear ? `Partial year to ${curDate}` : 'Full year',
+    note: endYear === curYear && startYear === endYear ? `Partial year to ${curDate}` : `Totals across ${yearsSpanned} year(s)`,
   }
 }
 
@@ -283,10 +259,12 @@ export default function App() {
       //    computes the exceedance % per era in the browser, and sends only the result.
       const exceedanceSlice = detectAndComputeExceedance(text, mfIndex, dayIndex, today)
 
-      // If exceedanceSlice has a currentPeriod count, suppress recentRows for the same
-      // window — sending raw rows alongside a pre-computed count causes Claude to recount
-      // and get confused when rows near the threshold appear but don't qualify.
-      const finalRecentRows = exceedanceSlice?.currentPeriod ? [] : recentRows
+      // When we've produced an authoritative code-computed count, suppress the raw
+      // rows for the same window — sending both causes Claude to recount and get
+      // confused when near-threshold rows appear but don't qualify. (etccdiSlice and
+      // the bounded exceedance count both carry the definitive numbers already.)
+      const hasComputedCount = exceedanceSlice?.count != null || etccdiSlice != null
+      const finalRecentRows = hasComputedCount ? [] : recentRows
 
       const res = await fetch('/api/chat', {
         method: 'POST',

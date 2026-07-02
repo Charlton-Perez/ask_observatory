@@ -22,9 +22,28 @@ export const FIELDS = [
   { key: 'ww',    label: 'Present weather code (WMO)',      higher: null  },
 ]
 
-const MONTH_NAMES = [
+export const MONTH_NAMES = [
   'January','February','March','April','May','June',
   'July','August','September','October','November','December',
+]
+
+// Single source of truth for month-name → number lookups and the month-name
+// regex alternation used across date/threshold detection in both files.
+export const MONTH_MAP = {
+  january:1, february:2, march:3, april:4, may:5, june:6,
+  july:7, august:8, september:9, october:10, november:11, december:12,
+  jan:1, feb:2, mar:3, apr:4, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12,
+}
+// Longest names first so "september" wins over "sep", "march" over "mar", etc.
+export const MONTH_NAME_RE = Object.keys(MONTH_MAP).sort((a, b) => b.length - a.length).join('|')
+
+// The four climate eras used everywhere (all-record + three comparison windows).
+// One definition, imported/reused by every era breakdown.
+export const ERAS = [
+  { key: 'all',       start: 1800, end: 9999 },
+  { key: '1961-1990', start: 1961, end: 1990 },
+  { key: '1991-2020', start: 1991, end: 2020 },
+  { key: '2001-now',  start: 2001, end: 9999 },
 ]
 
 function num(v) {
@@ -179,13 +198,7 @@ export function buildContext(rows) {
   }))
 
   // Era × month accumulators for climate change comparisons (mean Tx/Tn/RR/sss by era)
-  const ERA_DEFS_CTX = [
-    { key: 'all',       start: 1800, end: 9999 },
-    { key: '1961-1990', start: 1961, end: 1990 },
-    { key: '1991-2020', start: 1991, end: 2020 },
-    { key: '2001-now',  start: 2001, end: 9999 },
-  ]
-  const eraMonthAcc = Object.fromEntries(ERA_DEFS_CTX.map(e => [
+  const eraMonthAcc = Object.fromEntries(ERAS.map(e => [
     e.key, Array.from({ length: 12 }, () => ({ Tx: [], Tn: [], RR: [], sss: [] }))
   ]))
 
@@ -273,7 +286,7 @@ export function buildContext(rows) {
 
     // Era × month accumulators for climate change comparisons
     const rrV = num(row.RR), sssV = num(row.sss)
-    for (const era of ERA_DEFS_CTX) {
+    for (const era of ERAS) {
       if (year >= era.start && year <= era.end) {
         const eb = eraMonthAcc[era.key][month - 1]
         if (txV  !== null) eb.Tx.push(txV)
@@ -359,13 +372,7 @@ export function buildContext(rows) {
   })).map(y => ({ ...y, Tmean: (y.Tx_mean !== null && y.Tn_mean !== null) ? +((y.Tx_mean + y.Tn_mean) / 2).toFixed(2) : null }))
 
   // ETCCDI normals — mean annual index counts per climate era
-  const etEras = [
-    { key: 'all',       start: 1800, end: 9999 },
-    { key: '1961-1990', start: 1961, end: 1990 },
-    { key: '1991-2020', start: 1991, end: 2020 },
-    { key: '2001-now',  start: 2001, end: 9999 },
-  ]
-  const etccdiNormals = Object.fromEntries(etEras.map(era => {
+  const etccdiNormals = Object.fromEntries(ERAS.map(era => {
     const sub = byYear.filter(y => y.year >= era.start && y.year <= era.end && ETCCDI_KEYS.some(k => y[k] != null))
     const vals = Object.fromEntries(ETCCDI_KEYS.map(k =>
       [k, sub.length ? mean(sub.map(y => y[k] ?? 0)) : null]
@@ -482,12 +489,6 @@ export function buildContext(rows) {
   // broken down by climate era. This lets Claude answer:
   //   "probability of exceeding 28°C in June"
   //   "how has the chance of a hot day in July changed over time?"
-  const EXCEEDANCE_ERAS = [
-    { key: 'all',       start: 1800, end: 9999 },
-    { key: '1961-1990', start: 1961, end: 1990 },
-    { key: '1991-2020', start: 1991, end: 2020 },
-    { key: '2001-now',  start: 2001, end: 9999 },
-  ]
   // Thresholds: { field, threshold, direction: '>=' or '<' }
   const EXCEEDANCE_THRESHOLDS = [
     { field: 'Tx', threshold: 20, dir: '>=' },
@@ -503,13 +504,13 @@ export function buildContext(rows) {
 
   // Build accumulators: monthExceedance[month0][eraKey][field_threshold] = { hit, n }
   const mexAcc = Array.from({ length: 12 }, () =>
-    Object.fromEntries(EXCEEDANCE_ERAS.map(e => [e.key, {}]))
+    Object.fromEntries(ERAS.map(e => [e.key, {}]))
   )
   for (const row of rows) {
     const year = parseInt(row.year), month = parseInt(row.month)
     if (!year || !month) continue
     const mo = month - 1
-    for (const era of EXCEEDANCE_ERAS) {
+    for (const era of ERAS) {
       if (year < era.start || year > era.end) continue
       const bucket = mexAcc[mo][era.key]
       for (const { field, threshold, dir } of EXCEEDANCE_THRESHOLDS) {
@@ -532,7 +533,7 @@ export function buildContext(rows) {
       const tKey = `${field}${dir}${threshold}`
       const label = `${field}${dir}${threshold}`
       out[label] = {}
-      for (const era of EXCEEDANCE_ERAS) {
+      for (const era of ERAS) {
         const b = mexAcc[i][era.key][tKey] || { hit: 0, n: 0 }
         out[label][era.key] = pct(b.hit, b.n)
       }
@@ -568,7 +569,7 @@ export function buildContext(rows) {
 
   // Era × month means for climate change comparison questions
   // (e.g. "how has mean June maximum changed since 1961?")
-  const byMonthEra = Object.fromEntries(ERA_DEFS_CTX.map(era => [
+  const byMonthEra = Object.fromEntries(ERAS.map(era => [
     era.key,
     eraMonthAcc[era.key].map((eb, i) => ({
       month: i + 1,
@@ -696,20 +697,13 @@ export function buildMonthFieldIndex(rows) {
   return index
 }
 
-const EXCEEDANCE_ERAS = [
-  { key: 'all',       start: 1800, end: 9999 },
-  { key: '1961-1990', start: 1961, end: 1990 },
-  { key: '1991-2020', start: 1991, end: 2020 },
-  { key: '2001-now',  start: 2001, end: 9999 },
-]
-
 // Compute exceedance probability for a given field/threshold/direction in a month.
 // direction: '>=' (hot/wet) or '<' (frost/cold)
 // Returns { pct_all, byEra: { '1961-1990': pct, ... }, n_all, field, threshold, dir, monthName }
 export function computeMonthExceedance(monthFieldIndex, month, field, threshold, dir) {
   const entries = monthFieldIndex[month]?.[field] ?? []
   const result = { type: 'monthly_exceedance', field, threshold, dir, monthName: MONTH_NAMES[month - 1], byEra: {} }
-  for (const era of EXCEEDANCE_ERAS) {
+  for (const era of ERAS) {
     const subset = entries.filter(e => e.year >= era.start && e.year <= era.end)
     const hit = subset.filter(e => dir === '>=' ? e.value >= threshold : e.value < threshold).length
     result.byEra[era.key] = subset.length >= 10
@@ -741,14 +735,8 @@ export function computeAnnualExceedanceCounts(monthFieldIndex, field, threshold,
   const byYear = Object.entries(yearMap).sort(([a],[b]) => a - b).map(([y, days]) => ({ year: parseInt(y), days }))
 
   // Pre-compute era means so Claude doesn't have to average raw byYear data
-  const ERA_DEFS = [
-    { key: 'all',       start: 1800, end: 9999 },
-    { key: '1961-1990', start: 1961, end: 1990 },
-    { key: '1991-2020', start: 1991, end: 2020 },
-    { key: '2001-now',  start: 2001, end: 9999 },
-  ]
   const byEra = {}
-  for (const era of ERA_DEFS) {
+  for (const era of ERAS) {
     const sub = byYear.filter(y => y.year >= era.start && y.year <= era.end)
     if (sub.length >= 5)
       byEra[era.key] = { meanDaysPerYear: +(sub.reduce((s, y) => s + y.days, 0) / sub.length).toFixed(1), n: sub.length }
@@ -765,13 +753,42 @@ export function computeAnnualExceedanceCounts(monthFieldIndex, field, threshold,
   }
 }
 
-// ── Date extraction from question text ───────────────────────────────────────
-const MONTH_MAP = {
-  january:1, february:2, march:3, april:4, may:5, june:6,
-  july:7, august:8, september:9, october:10, november:11, december:12,
-  jan:1, feb:2, mar:3, apr:4, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12,
+// Authoritative exceedance count over a bounded date window [start, end] (inclusive,
+// "YYYY-MM-DD"). This is the single source of truth for "how many days …" questions
+// that name a concrete period (a year, a month, a range, or the current period) —
+// the count is computed from the daily index in code so Claude never has to tally
+// raw rows itself. Thresholds are inclusive (>= for warm/wet, < for cold/frost).
+// If `notAfter` is supplied, days after it are excluded (used to cap partial years).
+export function countExceedanceInRange(dayIndex, field, threshold, dir, start, end, notAfter) {
+  const rows = Object.values(dayIndex)
+    .filter(r => r.date && r.date >= start && r.date <= end && (!notAfter || r.date <= notAfter))
+    .sort((a, b) => a.date.localeCompare(b.date))
+
+  const matchRows = rows.filter(r => {
+    const v = r[field]
+    return v != null && (dir === '>=' ? v >= threshold : v < threshold)
+  })
+
+  // Per-month breakdown so Claude attributes events to the right month, not the
+  // current calendar month or the month it happens to be discussing.
+  const byMonth = {}
+  for (const r of matchRows) {
+    const mName = MONTH_NAMES[parseInt(r.date.slice(5, 7)) - 1]
+    byMonth[mName] = (byMonth[mName] || 0) + 1
+  }
+
+  return {
+    daysInRecord: rows.length,
+    count: matchRows.length,
+    byMonth,
+    // List exact dates when the count is small enough to enumerate a month's worth.
+    ...(matchRows.length <= 31 && {
+      matchingDays: matchRows.map(r => ({ date: r.date, [field]: r[field] })),
+    }),
+  }
 }
 
+// ── Date extraction from question text ───────────────────────────────────────
 // Returns { specificDates: ["YYYY-MM-DD",...], calendarDays: ["MM-DD",...] }
 export function extractDates(question) {
   const dates = new Set()
@@ -838,13 +855,6 @@ export function extractRecentDays(question) {
   return null
 }
 
-const MONTH_NAME_RE = 'january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec'
-const MONTH_NAME_MAP = {
-  january:1,february:2,march:3,april:4,may:5,june:6,
-  july:7,august:8,september:9,october:10,november:11,december:12,
-  jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,sept:9,oct:10,nov:11,dec:12,
-}
-
 // Detect explicit date ranges or a single month+year.
 // Returns { start: "YYYY-MM-DD", end: "YYYY-MM-DD" } or null.
 export function extractDateRange(question) {
@@ -867,7 +877,7 @@ export function extractDateRange(question) {
   if (myM) {
     const monStr = (myM[1].match(/\d/) ? myM[2] : myM[1]).toLowerCase()
     const year   = parseInt(myM[1].match(/\d/) ? myM[1] : myM[2])
-    const month  = MONTH_NAME_MAP[monStr]
+    const month  = MONTH_MAP[monStr]
     if (month && year) {
       const pad = n => String(n).padStart(2, '0')
       const start = `${year}-${pad(month)}-01`
