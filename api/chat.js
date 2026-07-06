@@ -1,40 +1,143 @@
 export const config = { runtime: 'edge' }
 
+// ── Architecture ──────────────────────────────────────────────────────────────
+// This endpoint is a stateless relay in a client-driven tool loop:
+//
+//   browser ──messages──▶ /api/chat ──▶ model (with TOOLS)
+//   browser ◀─content────┘
+//   browser executes any tool_use blocks locally against the parsed CSV,
+//   appends tool_results to messages, and calls /api/chat again.
+//   Loop ends when the model returns plain text (stop_reason: end_turn).
+//
+// The dataset never leaves the browser; the model decides what to compute.
+// Messages always travel in Anthropic content-block format; adapters convert
+// for OpenAI-compatible providers (openai / groq / mistral / ollama).
+
 // ── System prompt ─────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are the Reading University Atmospheric Observatory assistant. The observatory is in Reading, UK (51.4°N, 0.9°W), with one of the longest continuous instrumental weather records in the world.
+const SYSTEM_PROMPT = `You are the Reading University Atmospheric Observatory assistant. The observatory is in Reading, UK (51.4°N, 0.9°W), with one of the longest continuous instrumental weather records in the world — daily observations from 1908 to the present.
 
-You will receive a pre-computed context object containing: WMO climatological normals (30-year means for the current standard period, auto-updated per WMO convention); all-time ranked extremes; record months; per-calendar-month top-10 rankings; seasonal top-10 rankings for spring/summer/autumn/winter (meteorological seasons MAM/JJA/SON/DJF, winter attributed to year of Jan/Feb); decade and annual summaries; and top-10 longest consecutive runs. Additional raw daily records are included when a specific date, range, or recent period is mentioned.
+You have tools that query the full daily record directly. The first user message contains a small station context: data coverage, WMO climatological normals for the current 30-year standard period, and all-time record extremes.
 
-When comparing any value to "average" or "normal", always use the wmoNormals section and state which period it covers (e.g. "compared to the 1991–2020 average of…").
+CORE RULES
+- NEVER state a numeric answer you have not obtained from a tool result or the provided station context. Do not estimate, extrapolate, or answer from general knowledge of UK climate.
+- Prefer aggregate, rank_days and find_runs — they compute over the whole record cheaply. Use get_days only for short windows (a specific day, week or month someone asks about directly).
+- Chain tool calls freely: complex questions often need 2–4 calls (e.g. compute a count per era, then rank the extremes). You may request several tools in one turn when they are independent.
+- When comparing anything to "average" or "normal", use the wmoNormals in the station context and state the period (e.g. "compared with the 1991–2020 average of …").
+- For climate-change comparisons, use these standard eras via start/end dates: 1961-01-01→1990-12-31, 1991-01-01→2020-12-31, 2001-01-01→present, and the full record. Present era comparisons as a small table.
+- Meteorological seasons via the months parameter: spring [3,4,5], summer [6,7,8], autumn [9,10,11], winter [12,1,2]. For a NAMED winter (e.g. "winter 1963") use a date range instead: 1962-12-01 to 1963-02-28/29, attributed to the January/February year.
+- Probability/frequency questions: use aggregate with stat "count" and a filter — the result includes count, days_in_scope and percent. For a specific calendar date ("how often is 15 June above 25°C?") add calendar_day "06-15"; each day in scope is then one year, so percent ≈ probability. State the sample size.
+- "This year / this month / recent" questions: the record's end date is in the station context; today's date is given. Use explicit date ranges capped at the record end.
+- If a tool returns an error, read it — it usually says how to fix the call (narrow the range, coarser grouping, etc.). Adjust and retry rather than giving up.
+- The dataset is DAILY only. If asked about hourly, time-of-day, or sub-daily detail, explain politely that only daily observations are held here.
+- Missing values are recorded as null (shown as 'x' historically, common for some fields in early decades). If missing data materially affects an answer, say so, using the excluded-days counts in tool results.
+- Trace rainfall (< 0.05 mm) is stored as 0.0 mm by WMO convention, so a "dry day" / dry spell (RR == 0) means no measurable rain, which may include trace days.
 
-**Climate change comparisons across eras:** The context includes \`byMonthEra\` with mean daily Tx and Tn for each calendar month broken down by four eras: \`all\` (full record), \`1961-1990\`, \`1991-2020\`, and \`2001-now\`. Use this for questions like "how has the mean maximum in June changed?", "has July become warmer?", "compare summer temperatures between climate periods". Present results as a table showing each era's mean Tx (or Tn) for the month(s) in question. Note: \`meanDailyRR\` and \`meanDailySss\` are mean daily values — multiply by approximately 30 for a monthly total estimate, but prefer \`wmoNormals\` for the authoritative 1991–2020 monthly rainfall/sunshine totals.
+FIELDS (use these exact keys in tool calls)
+Tx = daily max temp (°C) · Tn = daily min temp (°C) · Tdry = 09 UTC dry-bulb temp (°C) · Twet = wet-bulb temp (°C) · Pmsl = mean sea-level pressure (hPa) · RH = relative humidity (%) · RR = rainfall (mm; a "rain day" is rd=1) · rd = rain day flag · sss = sunshine (hrs) · sd_cm = snow depth (cm) · af = air frost flag · gf = ground frost flag · ff_ms = wind speed (m/s; ×2.237 for mph, ×1.944 for knots) · dd = wind direction in tens of degrees (×10 for degrees: 0/360=N, 9=E, 18=S, 27=W; 0 also used for calm) · ww = WMO present weather code.
 
-Answer concisely and directly using only the data provided. Use **bold** for key values and dates. Use bullet lists or short tables for comparisons and rankings. Do not invent values or add lengthy meteorological theory — just tell the user what the data shows at Reading. Never mention internal variable or field names (such as byMonthEra, exceedanceSlice, etccdiNormals, wmoNormals, byYear, currentPeriod, etc.) in your answers — present the data in plain language only.
+REFERENCE DEFINITIONS (all inclusive thresholds; compute via tools, don't assume pre-computed values)
+Summer day: Tx > 25. Tropical night: Tn > 20. Ice day: Tx < 0. Frost day: Tn < 0. Heavy rain day: RR >= 10. Very heavy rain day: RR >= 20. UK Met Office heatwave (SE England / Reading): Tx >= 28 for >= 3 consecutive days (use find_runs). Dry spell: RR == 0 consecutive days.
 
-**WMO ETCCDI climate indices:** The context includes \`etccdiNormals\` (mean annual counts per climate era) and per-year counts in \`byYear\`, plus per-calendar-month top-10s in \`monthlyTopTens\` (mostSummerDays, mostTropNights). Indices: SU = Summer Days (Tx > 25°C), TR = Tropical Nights (Tn > 20°C), ID = Ice Days (Tx < 0°C), FD = Frost Days (Tn < 0°C), R10 = Heavy Rain Days (RR ≥ 10mm), R20 = Very Heavy Rain Days (RR ≥ 20mm). These are the internationally agreed ETCCDI standard. For questions about a specific year or partial year ("this year so far", "in June 2023"), an \`etccdiSlice\` with exact computed counts will be provided — use it directly and compare against \`etccdiNormals\` for context.
+WMO present weather codes (ww) — always translate to plain English: 0–3 cloud development; 4 smoke/haze; 5 haze; 10 mist; 11–12 shallow fog; 17 thunderstorm no precip; 20 drizzle (past hr); 21 rain (past hr); 22 snow (past hr); 25 rain showers (past hr); 29 thunderstorm (past hr); 30–35 dust/sandstorm; 36–39 drifting snow; 40–49 fog (45 obscuring, 48 rime); 50–55 drizzle (slight→heavy); 56–57 freezing drizzle; 60–65 rain (slight→heavy); 66–67 freezing rain; 68–69 rain/snow mix; 70–75 snow (slight→heavy); 77 snow grains; 79 ice pellets; 80–82 rain showers (slight→violent); 83–84 rain+snow showers; 85–86 snow showers; 87–90 hail showers; 95–99 thunderstorms (99 heavy with hail).
 
-**Heatwaves:** The context includes a \`heatwaves\` section with all individual heatwave events in the record (UK Met Office SE England definition: Tx ≥ 28°C for ≥ 3 consecutive days). Each event has start date, end date, duration in days, peak Tx, and mean Tx. The section also includes \`longestEvent\`, \`hottestEvent\`, \`byDecade\` counts, \`byYear\` counts (sparse — only years with at least one heatwave), and \`gapStats\` (shortest/longest/mean gap in days between consecutive heatwaves). Use this for questions about heatwave frequency, trends, the hottest or longest heatwave, how many heatwaves occurred in a given year or decade, and how long the typical wait between heatwaves is.
+STYLE
+Answer concisely and directly. Use **bold** for key values and dates, short tables for comparisons and rankings. Plain language only — never mention tool names, field keys, JSON, or internal mechanics in your answer. Just tell the user what the Reading record shows.`
 
-**Exceedance probabilities and climatological chance questions:**
-The context includes a \`monthlyExceedance\` section. For each calendar month it gives the historical percentage of days meeting conditions like Tx>=20, Tx>=25, Tx>=28, Tx>=30 (warm/hot days), Tn<0 (frost nights), Tn<5 (cold nights), RR>=1 (rain day), RR>=5 (moderate rain), RR>=10 (heavy rain). Each condition is broken down by era: \`all\` (full record), \`1961-1990\`, \`1991-2020\`, \`2001-now\`. Use this to answer questions like:
-- "What's the probability of exceeding 28°C in June?" → look up June \`Tx>=28\` → \`all\` value
-- "Has the chance of a hot July day changed?" → compare July \`Tx>=25\` across eras
-- "How likely is frost in April?" → April \`Tn<0\` → \`all\`
-State the era and sample size context when relevant. For probability on a **specific calendar date** (e.g. "15th June"), the raw annual records for that date are provided in \`calendarSlices\` — count how many years had Tx ≥ threshold and divide by total years to get the probability, stating the sample size.
+// ── Tool definitions (Anthropic schema; converted for OpenAI-compatible) ──────
 
-If asked about hourly, sub-daily, or time-of-day data (e.g. "what time did it reach 30°C", "hourly temperature", "morning vs afternoon"), politely explain that the dataset contains daily observations only and hourly records are not available here.
+const FIELD_ENUM = ['Tx', 'Tn', 'Tdry', 'Twet', 'Pmsl', 'RH', 'RR', 'rd', 'sss', 'sd_cm', 'af', 'gf', 'ff_ms', 'dd', 'ww']
+const OP_ENUM = ['>=', '<=', '>', '<', '==', '!=']
 
-Fields: Tx = daily max temp (°C), Tn = daily min temp (°C), Tdry = 09 UTC dry-bulb temp (°C), Twet = wet-bulb temp (°C), Pmsl = pressure (hPa), RH = relative humidity (%), RR = rainfall (mm), rd = rain day (1=yes), sss = sunshine (hrs), sd_cm = snow depth (cm), af = air frost day (1=yes), gf = ground frost day (1=yes), ff_ms = wind speed (m/s; multiply by 2.237 for mph, 1.944 for knots), dd = wind direction in units of 10° (multiply by 10 for degrees: 0/360=N, 9=E, 18=S, 27=W; 0 also used for calm).
+const SCOPE_PROPS = {
+  start: { type: 'string', description: 'Start date YYYY-MM-DD (inclusive). Omit for start of record.' },
+  end: { type: 'string', description: 'End date YYYY-MM-DD (inclusive). Omit for end of record.' },
+  months: { type: 'array', items: { type: 'integer', minimum: 1, maximum: 12 }, description: 'Restrict to these calendar months across the range, e.g. [6,7,8] for summer.' },
+}
+const FILTERS_PROP = {
+  filters: {
+    type: 'array',
+    description: 'AND-combined day conditions, e.g. [{"field":"Tx","op":">=","value":30}]. Days with a missing filter field never match.',
+    items: {
+      type: 'object',
+      properties: {
+        field: { type: 'string', enum: FIELD_ENUM },
+        op: { type: 'string', enum: OP_ENUM },
+        value: { type: 'number' },
+      },
+      required: ['field', 'op', 'value'],
+    },
+  },
+}
 
-WMO present weather codes (ww): 0–3 cloud development; 4 smoke/haze; 5 haze; 10 mist; 11–12 shallow fog; 17 thunderstorm no precip; 20 drizzle (past hour); 21 rain (past hour); 22 snow (past hour); 25 rain showers (past hour); 29 thunderstorm (past hour); 30–35 duststorm/sandstorm; 36–39 drifting snow; 40–49 fog (45=obscuring fog, 48=fog depositing rime); 50–55 drizzle (50/51 slight, 52/53 moderate, 54/55 heavy); 56–57 freezing drizzle; 60–61 slight rain; 62–63 moderate rain; 64–65 heavy rain; 66–67 freezing rain; 68–69 rain/snow mix; 70–75 snowfall (70/71 slight, 72/73 moderate, 74/75 heavy); 77 snow grains; 79 ice pellets; 80 slight rain showers; 81 moderate/heavy rain showers; 82 violent rain showers; 83–84 rain and snow showers; 85–86 snow showers; 87–88 hail/snow pellet showers; 89–90 hail showers; 95 thunderstorm slight/moderate; 96 thunderstorm with hail; 97 heavy thunderstorm; 99 thunderstorm with heavy hail. When reporting ww, always translate the code to a plain-English description.`
+const TOOLS = [
+  {
+    name: 'aggregate',
+    description: 'The workhorse. Compute mean/min/max/sum/count of a daily field over any date scope, with optional filters and grouping. stat "count" counts days matching the filters and returns count, days_in_scope and percent (use this for frequency/probability questions). min/max include the date of the extreme. Grouped results include a group_summary (mean of groups, highest, lowest) — use it instead of doing arithmetic across groups yourself. calendar_day "MM-DD" restricts to one calendar date across all years (one day per year).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        field: { type: 'string', enum: FIELD_ENUM, description: 'Field to aggregate. Required for mean/min/max/sum; ignored for count.' },
+        stat: { type: 'string', enum: ['mean', 'min', 'max', 'sum', 'count'] },
+        group_by: { type: 'string', enum: ['none', 'year', 'month', 'year_month', 'decade'], description: '"month" = calendar month across all years. Default none. Max 250 groups.' },
+        ...FILTERS_PROP,
+        ...SCOPE_PROPS,
+        calendar_day: { type: 'string', description: 'MM-DD to restrict to a single calendar date across all years.' },
+      },
+      required: ['stat'],
+    },
+  },
+  {
+    name: 'rank_days',
+    description: 'Top-N individual days by any field, ascending or descending, with optional filters and date/month scope. Returns date, the ranked value, and Tx/Tn/RR for context. Use for "hottest/wettest/windiest day" questions, record rankings, and extremes within a period. calendar_day "MM-DD" ranks all historical occurrences of one calendar date (e.g. every Christmas Day).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        field: { type: 'string', enum: FIELD_ENUM },
+        order: { type: 'string', enum: ['desc', 'asc'], description: 'desc = highest first (default).' },
+        n: { type: 'integer', minimum: 1, maximum: 50, description: 'Default 10, max 50.' },
+        ...FILTERS_PROP,
+        ...SCOPE_PROPS,
+        calendar_day: { type: 'string', description: 'MM-DD to rank one calendar date across all years.' },
+      },
+      required: ['field'],
+    },
+  },
+  {
+    name: 'find_runs',
+    description: 'Find consecutive-day spells where a condition holds: heatwaves (Tx >= 28, min_length 3), dry spells (RR == 0), frost runs (Tn < 0), sunless streaks (sss == 0), etc. Returns the longest runs (start, end, days, peak value), total count of qualifying runs, mean length, and runs per decade. Gaps in the record break a run.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        field: { type: 'string', enum: FIELD_ENUM },
+        op: { type: 'string', enum: OP_ENUM },
+        value: { type: 'number' },
+        min_length: { type: 'integer', minimum: 1, description: 'Minimum run length in days to count. Default 3.' },
+        top_n: { type: 'integer', minimum: 1, maximum: 25, description: 'How many longest runs to return. Default 10.' },
+        ...SCOPE_PROPS,
+      },
+      required: ['field', 'op', 'value'],
+    },
+  },
+  {
+    name: 'get_days',
+    description: 'Fetch raw daily rows for a short date window (max 400 days) — use ONLY when the user asks about specific dates or a short period ("what was 14 October 1987 like?", "last week"). For anything statistical over longer periods, use aggregate/rank_days/find_runs instead. Optionally restrict fields to keep results small.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        start: { type: 'string', description: 'YYYY-MM-DD inclusive. Required.' },
+        end: { type: 'string', description: 'YYYY-MM-DD inclusive. Required.' },
+        fields: { type: 'array', items: { type: 'string', enum: FIELD_ENUM }, description: 'Subset of fields to return. Default: all.' },
+      },
+      required: ['start', 'end'],
+    },
+  },
+]
 
 // ── Provider adapters ─────────────────────────────────────────────────────────
-// Each adapter takes the same normalised arguments and returns { answer: string }.
-// Adding a new provider = adding one function here + one case in the router.
+// Each returns a normalised { content: [...anthropic-style blocks], stop_reason }.
 
-async function callAnthropic({ model, systemPrompt, messages }) {
-  const apiKey = process.env.MODEL_API_KEY || process.env.ANTHROPIC_API_KEY
+async function callAnthropic({ model, messages, apiKey }) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -42,95 +145,133 @@ async function callAnthropic({ model, systemPrompt, messages }) {
       'x-api-key': apiKey,
       'anthropic-version': '2023-06-01',
     },
-    body: JSON.stringify({ model, max_tokens: 2048, system: systemPrompt, messages }),
+    body: JSON.stringify({
+      model,
+      max_tokens: 3000,
+      // cache_control here caches the tools + system prefix across the loop's
+      // repeated calls (and across questions in a session) — big cost saving.
+      system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+      tools: TOOLS,
+      messages,
+    }),
   })
   if (!res.ok) throw new Error(await res.text())
   const data = await res.json()
-  return data.content?.[0]?.text ?? ''
+  return { content: data.content ?? [], stop_reason: data.stop_reason ?? 'end_turn' }
 }
 
-// Covers: Ollama, OpenAI, Groq, Mistral — all speak the OpenAI chat format.
-async function callOpenAICompatible({ model, systemPrompt, messages, baseUrl, apiKey }) {
-  const url = `${baseUrl}/v1/chat/completions`
-  // Convert Anthropic message format to OpenAI format (system goes into messages array)
-  const oaiMessages = [
-    { role: 'system', content: systemPrompt },
-    ...messages.map(m => ({ role: m.role, content: m.content })),
-  ]
-  const res = await fetch(url, {
+// Convert Anthropic-format messages to OpenAI chat format (tool calls included).
+function toOpenAIMessages(messages) {
+  const out = [{ role: 'system', content: SYSTEM_PROMPT }]
+  for (const m of messages) {
+    if (typeof m.content === 'string') { out.push({ role: m.role, content: m.content }); continue }
+    if (m.role === 'assistant') {
+      const text = m.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+      const toolCalls = m.content
+        .filter(b => b.type === 'tool_use')
+        .map(b => ({ id: b.id, type: 'function', function: { name: b.name, arguments: JSON.stringify(b.input ?? {}) } }))
+      const msg = { role: 'assistant', content: text || null }
+      if (toolCalls.length) msg.tool_calls = toolCalls
+      out.push(msg)
+    } else {
+      for (const b of m.content) {
+        if (b.type === 'tool_result') {
+          out.push({
+            role: 'tool',
+            tool_call_id: b.tool_use_id,
+            content: typeof b.content === 'string' ? b.content : JSON.stringify(b.content),
+          })
+        }
+      }
+      const text = m.content.filter(b => b.type === 'text').map(b => b.text).join('\n')
+      if (text) out.push({ role: 'user', content: text })
+    }
+  }
+  return out
+}
+
+// Covers OpenAI, Groq, Mistral, Ollama — all speak OpenAI chat + tools format.
+async function callOpenAICompatible({ model, messages, baseUrl, apiKey }) {
+  const res = await fetch(`${baseUrl}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
     },
-    body: JSON.stringify({ model, messages: oaiMessages, max_tokens: 2048 }),
+    body: JSON.stringify({
+      model,
+      max_tokens: 3000,
+      messages: toOpenAIMessages(messages),
+      tools: TOOLS.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })),
+    }),
   })
   if (!res.ok) throw new Error(await res.text())
   const data = await res.json()
-  return data.choices?.[0]?.message?.content ?? ''
+  const msg = data.choices?.[0]?.message ?? {}
+  const content = []
+  if (msg.content) content.push({ type: 'text', text: msg.content })
+  for (const tc of msg.tool_calls ?? []) {
+    let input = {}
+    try { input = JSON.parse(tc.function?.arguments || '{}') } catch { /* leave empty; executor will error informatively */ }
+    content.push({ type: 'tool_use', id: tc.id, name: tc.function?.name, input })
+  }
+  return { content, stop_reason: data.choices?.[0]?.finish_reason === 'tool_calls' ? 'tool_use' : 'end_turn' }
 }
 
-async function callGemini({ model, systemPrompt, messages }) {
-  const apiKey = process.env.MODEL_API_KEY
+// Gemini's tool format differs enough that it is text-only here for now.
+async function callGemini({ model, messages, apiKey }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`
-  // Gemini uses a different message format — system instruction is separate
   const contents = messages.map(m => ({
     role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
+    parts: [{ text: typeof m.content === 'string' ? m.content : m.content.map(b => b.text || JSON.stringify(b)).join('\n') }],
   }))
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
       contents,
-      generationConfig: { maxOutputTokens: 2048 },
+      generationConfig: { maxOutputTokens: 3000 },
     }),
   })
   if (!res.ok) throw new Error(await res.text())
   const data = await res.json()
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+  return { content: [{ type: 'text', text }], stop_reason: 'end_turn' }
 }
 
-// ── Provider router ───────────────────────────────────────────────────────────
-// Controlled entirely by environment variables — no code changes to switch model.
-//
-// MODEL_PROVIDER  = anthropic | ollama | openai | groq | mistral | gemini
-// MODEL_NAME      = the model ID for that provider (see README)
-// MODEL_BASE_URL  = base URL (required for ollama; optional override for others)
-// MODEL_API_KEY   = API key (falls back to ANTHROPIC_API_KEY for anthropic)
-//
-// Provider defaults (used when env vars are not set):
+// ── Provider router (env-controlled, unchanged interface) ─────────────────────
+// MODEL_PROVIDER = anthropic | openai | groq | mistral | ollama | gemini
+// MODEL_NAME, MODEL_BASE_URL, MODEL_API_KEY as before.
+// NOTE: gemini currently answers without tools (text-only fallback).
+
 const PROVIDER_DEFAULTS = {
-  anthropic: { baseUrl: 'https://api.anthropic.com',               model: 'claude-haiku-4-5-20251001'  },
-  openai:    { baseUrl: 'https://api.openai.com',                  model: 'gpt-4o-mini'                },
-  groq:      { baseUrl: 'https://api.groq.com/openai',             model: 'llama-3.1-70b-versatile'    },
-  mistral:   { baseUrl: 'https://api.mistral.ai',                  model: 'mistral-small-latest'       },
-  gemini:    { baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-2.0-flash'         },
-  ollama:    { baseUrl: 'http://localhost:11434',                   model: 'qwen2.5:14b'               },
+  anthropic: { baseUrl: 'https://api.anthropic.com', model: 'claude-haiku-4-5-20251001' },
+  openai: { baseUrl: 'https://api.openai.com', model: 'gpt-4o-mini' },
+  groq: { baseUrl: 'https://api.groq.com/openai', model: 'llama-3.1-70b-versatile' },
+  mistral: { baseUrl: 'https://api.mistral.ai', model: 'mistral-small-latest' },
+  gemini: { baseUrl: 'https://generativelanguage.googleapis.com', model: 'gemini-2.0-flash' },
+  ollama: { baseUrl: 'http://localhost:11434', model: 'qwen2.5:14b' },
 }
 
 async function callModel(messages) {
   const provider = (process.env.MODEL_PROVIDER || 'anthropic').toLowerCase()
   const defaults = PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.anthropic
-  const model   = process.env.MODEL_NAME     || defaults.model
+  const model = process.env.MODEL_NAME || defaults.model
   const baseUrl = process.env.MODEL_BASE_URL || defaults.baseUrl
-  const apiKey  = process.env.MODEL_API_KEY  || process.env.ANTHROPIC_API_KEY
+  const apiKey = process.env.MODEL_API_KEY || process.env.ANTHROPIC_API_KEY
 
-  const args = { model, systemPrompt: SYSTEM_PROMPT, messages, baseUrl, apiKey }
-
+  const args = { model, messages, baseUrl, apiKey }
   switch (provider) {
     case 'anthropic': return callAnthropic(args)
-    case 'gemini':    return callGemini(args)
+    case 'gemini': return callGemini(args)
     case 'ollama':
     case 'openai':
     case 'groq':
-    case 'mistral':   return callOpenAICompatible(args)
-    default:          return callAnthropic(args)
+    case 'mistral': return callOpenAICompatible(args)
+    default: return callAnthropic(args)
   }
 }
-
-// ── Retry with backoff ────────────────────────────────────────────────────────
 
 async function callWithRetry(messages, maxAttempts = 3) {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -146,54 +287,40 @@ async function callWithRetry(messages, maxAttempts = 3) {
 }
 
 // ── Request handler ───────────────────────────────────────────────────────────
+// Body: { messages: [...anthropic-format], token }
+// Reply: { content: [...blocks], stop_reason } — the client runs the loop.
+
+const MAX_MESSAGES = 120        // hard sanity caps on relayed payloads
+const MAX_BODY_BYTES = 1_500_000
 
 export default async function handler(req) {
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
 
-  const { question, context, dailyRows, calendarSlices, recentRows, exceedanceSlice, etccdiSlice, today, history, token } = await req.json()
+  const raw = await req.text()
+  if (raw.length > MAX_BODY_BYTES) return new Response('Payload too large', { status: 413 })
+
+  let body
+  try { body = JSON.parse(raw) } catch { return new Response('Invalid JSON', { status: 400 }) }
+  const { messages, token } = body
 
   if (token !== process.env.INVITE_TOKEN) return new Response('Unauthorized', { status: 401 })
-  if (!question || !context) return new Response('Missing question or context', { status: 400 })
-
-  const todayStr = today || new Date().toISOString().slice(0, 10)
-
-  // Build data context block (sent as the first user turn, once per conversation)
-  const dataContext = [`Today's date: ${todayStr}\n\nDataset context:\n${JSON.stringify(context)}`]
-  if (dailyRows?.length > 0)
-    dataContext.push(`Raw daily record(s) for the date(s) mentioned:\n${JSON.stringify(dailyRows)}`)
-  if (calendarSlices && Object.keys(calendarSlices).length > 0)
-    dataContext.push(`All historical records for the calendar day(s) mentioned (sorted by Tx descending):\n${JSON.stringify(calendarSlices)}`)
-  if (recentRows?.length > 0)
-    dataContext.push(`Daily records for the recent period requested (${recentRows.length} days, chronological):\n${JSON.stringify(recentRows)}`)
-  if (exceedanceSlice)
-    dataContext.push(`On-demand threshold computation for this query (computed from the full daily record in the browser):\n${JSON.stringify(exceedanceSlice)}\nHOW TO USE THIS:\n- If 'type' is 'threshold_count': the top-level 'count' is the authoritative answer for the period named in 'scope' — state it directly and NEVER recount from any other data. 'byMonth' shows which months those days fell in; attribute events to those months, not the current calendar month or whatever month you happen to be discussing. 'matchingDays' (when present) lists the exact qualifying dates and values — list them. 'climatology' gives the long-term average for comparison ('byEra.<era>.meanDaysPerYear' for whole-year windows, or per-era percentages for a named month).\n- If 'type' is 'monthly_exceedance': 'byEra' gives the percentage of days meeting the threshold for that calendar month, per climate era.\n- If 'type' is 'annual_counts': 'byEra.<era>.meanDaysPerYear' is the mean number of qualifying days per year for each era — use these directly rather than averaging 'byYear' yourself.\nThresholds are inclusive (≥ for warm/wet, < for cold/frost).`)
-  if (etccdiSlice)
-    dataContext.push(`WMO ETCCDI index counts for the period specified in this query (computed from the full daily record in the browser):\n${JSON.stringify(etccdiSlice)}\nThese are the authoritative counts — use them directly, do not recount. They are TOTALS across the window in 'yearRange' (spanning 'yearsSpanned' years); divide by 'yearsSpanned' for an annual average if asked. SU=Summer Days (Tx>25°C), TR=Tropical Nights (Tn>20°C), ID=Ice Days (Tx<0°C), FD=Frost Days (Tn<0°C), R10=Heavy Rain Days (≥10mm), R20=Very Heavy Rain Days (≥20mm).`)
-
-  // Build full message list: context preamble + capped history + current question
-  const recentHistory = (history || []).slice(-20)
-  const priorMessages = recentHistory
-    .map(m => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.text }))
-    .filter((m, i, arr) => i === 0 || m.role !== arr[i - 1].role)
-
-  const messages = [
-    { role: 'user',      content: dataContext.join('\n\n') },
-    { role: 'assistant', content: 'Understood — I have the full dataset context loaded. What would you like to know?' },
-    ...priorMessages,
-    { role: 'user',      content: question },
-  ]
+  if (!Array.isArray(messages) || messages.length === 0 || messages.length > MAX_MESSAGES)
+    return new Response('Missing or invalid messages', { status: 400 })
 
   try {
-    const answer = await callWithRetry(messages)
-    return new Response(JSON.stringify({ answer }), { headers: { 'Content-Type': 'application/json' } })
+    const result = await callWithRetry(messages)
+    return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } })
   } catch (err) {
     console.error('Model error:', err.message)
     const msg = (err.message || '').toLowerCase()
     const friendly = msg.includes('overload')
       ? 'The AI service is busy right now — please try again in a moment.'
       : msg.includes('rate_limit') || msg.includes('rate limit')
-      ? 'We\'ve hit the usage limit for this minute — please wait a few seconds and try again.'
-      : `Something went wrong: ${err.message}`
-    return new Response(JSON.stringify({ answer: friendly }), { headers: { 'Content-Type': 'application/json' } })
+        ? "We've hit the usage limit for this minute — please wait a few seconds and try again."
+        : `Something went wrong: ${err.message}`
+    return new Response(JSON.stringify({
+      content: [{ type: 'text', text: friendly }],
+      stop_reason: 'error',
+    }), { headers: { 'Content-Type': 'application/json' } })
   }
 }

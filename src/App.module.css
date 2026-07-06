@@ -300,3 +300,37 @@
 
 .sendBtn:hover:not(:disabled) { background: #14304d; }
 .sendBtn:disabled { opacity: 0.45; cursor: default; }
+
+/* Tool activity trail */
+.activity {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: #5a708a;
+  font-style: italic;
+}
+
+.steps {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #d8d5d0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.stepsLabel {
+  font-size: 0.72rem;
+  color: #8a94a0;
+  margin-right: 2px;
+}
+
+.stepChip {
+  background: #f0ede8;
+  border: 1px solid #e0ddd8;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  color: #4a5a6a;
+  font-family: monospace;
+}

@@ -60,6 +60,10 @@ export function parseCSV(text) {
     header: true,
     skipEmptyLines: true,
     transformHeader: h => h.trim(),
+    // Trace rainfall (< 0.05 mm) is recorded as 'tr' — treat as 0.0 by WMO
+    // convention so those days count in totals, means and dry-spell runs
+    // instead of being silently dropped as missing (~80 days/year!).
+    transform: (v, field) => (field === 'RR' && String(v).trim().toLowerCase() === 'tr') ? '0.0' : v,
   })
   return data
 }
