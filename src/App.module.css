@@ -59,7 +59,7 @@
   max-width: 820px;
   width: 100%;
   margin: 0 auto;
-  padding: 28px 20px 110px;
+  padding: 28px 20px 28px;
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -377,10 +377,9 @@
   font-family: monospace;
 }
 
-/* Footer with licence */
+/* Footer with licence — sits at the very bottom, beneath the ask bar */
 .footer {
-  margin-top: auto;
-  padding-top: 20px;
+  padding-top: 18px;
   border-top: 1px solid #e6ded4;
 }
 
@@ -404,21 +403,16 @@
 .footerText a { color: #d61926; text-decoration: none; }
 .footerText a:hover { text-decoration: underline; }
 
-/* Input */
+/* Ask bar — in normal flow, pushed to the bottom with the footer beneath it */
 .inputRow {
-  position: fixed;
-  bottom: 0;
-  background: rgba(245,244,240,0.95);
-  backdrop-filter: blur(8px);
-  border-top: 1px solid #e0ddd8;
-  padding: 12px 20px;
+  margin-top: auto;
   display: flex;
   gap: 10px;
-  max-width: 820px;
-  margin: 0 auto;
-  width: 100%;
-  left: 50%;
-  transform: translateX(-50%);
+  padding: 12px;
+  background: #fff;
+  border: 1px solid #e0ddd8;
+  border-radius: 12px;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
 
 .input {
