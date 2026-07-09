@@ -137,6 +137,37 @@ const TOOLS = [
 // ── Provider adapters ─────────────────────────────────────────────────────────
 // Each returns a normalised { content: [...anthropic-style blocks], stop_reason }.
 
+// Insert Anthropic prompt-cache breakpoints so repeated prefixes are billed at the
+// ~10% cache-read rate instead of full price. Combined with the cached system+tools
+// block, this covers the two biggest repeated chunks:
+//   • the station-context first user message (~12 KB, identical all session), and
+//   • the running conversation, so each tool-loop round reuses the prior rounds.
+// (Up to 4 breakpoints; we use at most 3: system + first user + last block.)
+function withPromptCaching(messages) {
+  if (!messages?.length) return messages
+  const asCachedText = (content) =>
+    typeof content === 'string'
+      ? [{ type: 'text', text: content, cache_control: { type: 'ephemeral' } }]
+      : content
+
+  const out = messages.map(m => ({ ...m }))
+
+  // (1) Station context — the large, static first user turn.
+  out[0] = { ...out[0], content: asCachedText(out[0].content) }
+
+  // (2) Tail of the conversation — reused as a prefix on the next tool-loop round.
+  const i = out.length - 1
+  if (typeof out[i].content === 'string') {
+    out[i] = { ...out[i], content: asCachedText(out[i].content) }
+  } else if (Array.isArray(out[i].content) && out[i].content.length) {
+    const blocks = out[i].content.map(b => ({ ...b }))
+    const last = blocks.length - 1
+    blocks[last] = { ...blocks[last], cache_control: { type: 'ephemeral' } }
+    out[i] = { ...out[i], content: blocks }
+  }
+  return out
+}
+
 async function callAnthropic({ model, messages, apiKey }) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -148,11 +179,10 @@ async function callAnthropic({ model, messages, apiKey }) {
     body: JSON.stringify({
       model,
       max_tokens: 3000,
-      // cache_control here caches the tools + system prefix across the loop's
-      // repeated calls (and across questions in a session) — big cost saving.
+      // cache the tools + system prefix (static across every call).
       system: [{ type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
       tools: TOOLS,
-      messages,
+      messages: withPromptCaching(messages),
     }),
   })
   if (!res.ok) throw new Error(await res.text())
