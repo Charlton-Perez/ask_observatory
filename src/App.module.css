@@ -1,46 +1,117 @@
-/* Layout */
+/* University of Reading brand palette */
+/*  brand maroon #8e0915 · Reading red #d61926 · dark maroon #4b0108 · ink #434142 */
+
 .shell {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  font-family: Arial, Helvetica, "Helvetica Neue", sans-serif;
+  color: #434142;
 }
 
+/* Header */
 .header {
-  background: #1a3a5c;
+  background: #8e0915;
   color: #fff;
-  padding: 20px 32px;
+  padding: 16px 32px;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 18px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.18);
 }
 
-.headerIcon {
-  font-size: 2.2rem;
-  line-height: 1;
+.headerLogo {
+  height: 42px;
+  width: auto;
+  /* logo art is black; invert to white for the maroon bar */
+  filter: brightness(0) invert(1);
 }
+
+.headerText { flex: 1; }
 
 .headerTitle {
   font-size: 1.25rem;
   font-weight: 700;
   margin-bottom: 2px;
+  letter-spacing: 0.01em;
 }
 
 .headerSub {
   font-size: 0.82rem;
-  opacity: 0.72;
+  opacity: 0.8;
 }
+
+.headerLink {
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid rgba(255,255,255,0.5);
+  border-radius: 20px;
+  padding: 6px 14px;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.headerLink:hover { background: rgba(255,255,255,0.14); border-color: #fff; }
 
 .main {
   flex: 1;
   max-width: 820px;
   width: 100%;
   margin: 0 auto;
-  padding: 32px 20px 100px;
+  padding: 28px 20px 110px;
   display: flex;
   flex-direction: column;
   gap: 20px;
 }
+
+/* Beta acknowledgement banner */
+.beta {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  background: #fdf2f2;
+  border: 1px solid #f0c8c5;
+  border-left: 4px solid #d61926;
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.betaTag {
+  background: #d61926;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: 6px;
+  padding: 3px 9px;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.betaText {
+  flex: 1;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: #5a4a4a;
+}
+.betaText strong { color: #8e0915; }
+
+.betaBtn {
+  align-self: center;
+  background: #8e0915;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 0.83rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+.betaBtn:hover { background: #6f0710; }
 
 /* Access gate */
 .gateWrap {
@@ -49,33 +120,57 @@
   align-items: center;
   justify-content: center;
   background: #f5f4f0;
+  font-family: Arial, Helvetica, "Helvetica Neue", sans-serif;
+  padding: 20px;
 }
 
 .gate {
   text-align: center;
-  padding: 48px 40px;
+  padding: 44px 40px;
   background: #fff;
   border-radius: 16px;
-  box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-  max-width: 420px;
+  border-top: 5px solid #8e0915;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+  max-width: 440px;
 }
 
 .gateLogo {
-  font-size: 3rem;
-  margin-bottom: 16px;
+  height: 54px;
+  width: auto;
+  margin-bottom: 22px;
 }
 
 .gate h1 {
-  font-size: 1.3rem;
+  font-size: 1.4rem;
   font-weight: 700;
-  color: #1a3a5c;
-  margin-bottom: 12px;
+  color: #8e0915;
+  margin-bottom: 6px;
 }
 
-.gate p {
+.gateSub {
+  color: #6a5f5f;
+  font-size: 0.9rem;
+  margin-bottom: 20px;
+}
+
+.gateNote {
   color: #555;
   line-height: 1.6;
+  font-size: 0.9rem;
+  padding: 14px 0;
+  border-top: 1px solid #eee;
+  border-bottom: 1px solid #eee;
 }
+
+.gateLink {
+  display: inline-block;
+  margin-top: 18px;
+  color: #d61926;
+  font-weight: 600;
+  font-size: 0.86rem;
+  text-decoration: none;
+}
+.gateLink:hover { text-decoration: underline; }
 
 /* Loading state */
 .loading {
@@ -93,8 +188,8 @@
 
 /* Data loaded bar */
 .dataCard {
-  background: #e8f4ea;
-  border: 1px solid #a8d5b0;
+  background: #f3efe9;
+  border: 1px solid #ddd3c8;
   border-radius: 10px;
   padding: 12px 16px;
   display: flex;
@@ -105,7 +200,7 @@
 }
 
 .dataTag {
-  background: #2e7d52;
+  background: #8e0915;
   color: #fff;
   border-radius: 6px;
   padding: 2px 8px;
@@ -116,9 +211,8 @@
 
 .dataInfo {
   flex: 1;
-  color: #2a4a35;
+  color: #5a4a45;
 }
-
 
 /* Example questions */
 .examples {
@@ -145,19 +239,19 @@
 
 .exampleBtn {
   text-align: left;
-  background: #f5f4f0;
-  border: 1px solid #e0ddd8;
+  background: #f7f2f2;
+  border: 1px solid #ebdedd;
   border-radius: 8px;
   padding: 10px 14px;
   font-size: 0.9rem;
-  color: #1a3a5c;
+  color: #8e0915;
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
 }
 
 .exampleBtn:hover {
-  background: #edf2f7;
-  border-color: #1a3a5c;
+  background: #fdeceb;
+  border-color: #d61926;
 }
 
 /* Chat */
@@ -175,7 +269,7 @@
 
 .bubbleUser {
   align-self: flex-end;
-  background: #1a3a5c;
+  background: #8e0915;
   color: #fff;
   border-bottom-right-radius: 4px;
 }
@@ -219,11 +313,12 @@
 .markdown li { margin-bottom: 0.25em; }
 .markdown table { border-collapse: collapse; width: 100%; margin-bottom: 0.6em; font-size: 0.88rem; }
 .markdown th, .markdown td { border: 1px solid #d8d5d0; padding: 5px 10px; text-align: left; }
-.markdown th { background: #f0ede8; font-weight: 600; }
+.markdown th { background: #f3efe9; font-weight: 600; }
 .markdown code { background: #f0ede8; border-radius: 4px; padding: 1px 5px; font-size: 0.85em; font-family: monospace; }
 .markdown pre { background: #f0ede8; border-radius: 8px; padding: 10px 14px; overflow-x: auto; margin-bottom: 0.6em; }
 .markdown pre code { background: none; padding: 0; }
-.markdown h1, .markdown h2, .markdown h3 { font-weight: 600; margin-bottom: 0.4em; color: #1a3a5c; }
+.markdown h1, .markdown h2, .markdown h3 { font-weight: 600; margin-bottom: 0.4em; color: #8e0915; }
+.markdown a { color: #d61926; }
 
 /* Typing indicator */
 .typing {
@@ -235,7 +330,7 @@
 .typing span {
   width: 8px;
   height: 8px;
-  background: #b0c0d0;
+  background: #d8a6a3;
   border-radius: 50%;
   animation: bounce 1.2s infinite;
 }
@@ -248,12 +343,71 @@
   30% { transform: translateY(-6px); }
 }
 
+/* Tool activity trail */
+.activity {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: #9a5a5a;
+  font-style: italic;
+}
+
+.steps {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px dashed #d8d5d0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.stepsLabel {
+  font-size: 0.72rem;
+  color: #8a94a0;
+  margin-right: 2px;
+}
+
+.stepChip {
+  background: #f3efe9;
+  border: 1px solid #e0ddd8;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  color: #6a5a55;
+  font-family: monospace;
+}
+
+/* Footer with licence */
+.footer {
+  margin-top: auto;
+  padding-top: 20px;
+  border-top: 1px solid #e6ded4;
+}
+
+.footerRow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.ccLink { flex-shrink: 0; line-height: 0; }
+.ccBadge { height: 31px; width: auto; display: block; }
+
+.footerText {
+  flex: 1;
+  min-width: 240px;
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: #8a7f7a;
+}
+.footerText a { color: #d61926; text-decoration: none; }
+.footerText a:hover { text-decoration: underline; }
+
 /* Input */
 .inputRow {
   position: fixed;
   bottom: 0;
-  left: 0;
-  right: 0;
   background: rgba(245,244,240,0.95);
   backdrop-filter: blur(8px);
   border-top: 1px solid #e0ddd8;
@@ -282,11 +436,11 @@
 
 .input:focus {
   outline: none;
-  border-color: #1a3a5c;
+  border-color: #8e0915;
 }
 
 .sendBtn {
-  background: #1a3a5c;
+  background: #8e0915;
   color: #fff;
   border: none;
   border-radius: 10px;
@@ -298,39 +452,11 @@
   white-space: nowrap;
 }
 
-.sendBtn:hover:not(:disabled) { background: #14304d; }
+.sendBtn:hover:not(:disabled) { background: #6f0710; }
 .sendBtn:disabled { opacity: 0.45; cursor: default; }
 
-/* Tool activity trail */
-.activity {
-  margin-top: 6px;
-  font-size: 0.78rem;
-  color: #5a708a;
-  font-style: italic;
-}
-
-.steps {
-  margin-top: 10px;
-  padding-top: 8px;
-  border-top: 1px dashed #d8d5d0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-
-.stepsLabel {
-  font-size: 0.72rem;
-  color: #8a94a0;
-  margin-right: 2px;
-}
-
-.stepChip {
-  background: #f0ede8;
-  border: 1px solid #e0ddd8;
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 0.72rem;
-  color: #4a5a6a;
-  font-family: monospace;
+@media (max-width: 560px) {
+  .header { padding: 14px 18px; gap: 12px; }
+  .headerLink { display: none; }
+  .headerLogo { height: 34px; }
 }

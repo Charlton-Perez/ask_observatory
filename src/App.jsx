@@ -6,6 +6,8 @@ import { createToolExecutor, describeToolCall } from './toolExecutor'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
+const OBSERVATORY_URL = 'https://research.reading.ac.uk/meteorology/atmospheric-observatory/'
+const LICENSE_URL = 'https://creativecommons.org/licenses/by/4.0/'
 
 const EXAMPLE_QUESTIONS = [
   'What is the hottest temperature ever recorded?',
@@ -30,8 +32,11 @@ export default function App() {
   const [question, setQuestion] = useState('')
   const [asking, setAsking] = useState(false)
   const [activity, setActivity] = useState(null)   // live "Computing: …" line while tools run
+  const [betaAck, setBetaAck] = useState(() => localStorage.getItem('ruaoBetaAck') === '1')
   const bottomRef = useRef(null)
   const token = new URLSearchParams(window.location.search).get('token')
+
+  const dismissBeta = () => { localStorage.setItem('ruaoBetaAck', '1'); setBetaAck(true) }
 
   // Load and parse the dataset once on mount
   useEffect(() => {
@@ -155,9 +160,16 @@ export default function App() {
     return (
       <div className={styles.gateWrap}>
         <div className={styles.gate}>
-          <div className={styles.gateLogo}>&#9728;</div>
-          <h1>Reading Atmospheric Observatory</h1>
-          <p>This tool is available to invited users only.<br />Please use the link provided to you.</p>
+          <img className={styles.gateLogo} src="/uor-logo.png" alt="University of Reading" />
+          <h1>Atmospheric Observatory</h1>
+          <p className={styles.gateSub}>Ask questions about 100+ years of daily weather records</p>
+          <p className={styles.gateNote}>
+            This tool is currently available to invited users only.<br />
+            Please use the link provided to you.
+          </p>
+          <a className={styles.gateLink} href={OBSERVATORY_URL} target="_blank" rel="noreferrer">
+            About the Atmospheric Observatory &rarr;
+          </a>
         </div>
       </div>
     )
@@ -166,14 +178,29 @@ export default function App() {
   return (
     <div className={styles.shell}>
       <header className={styles.header}>
-        <span className={styles.headerIcon}>&#9728;</span>
-        <div>
-          <h1 className={styles.headerTitle}>Reading Atmospheric Observatory</h1>
+        <img className={styles.headerLogo} src="/uor-logo.png" alt="University of Reading" />
+        <div className={styles.headerText}>
+          <h1 className={styles.headerTitle}>Atmospheric Observatory</h1>
           <p className={styles.headerSub}>Ask questions about 100+ years of daily weather records</p>
         </div>
+        <a className={styles.headerLink} href={OBSERVATORY_URL} target="_blank" rel="noreferrer">
+          About the Observatory &rarr;
+        </a>
       </header>
 
       <main className={styles.main}>
+        {!betaAck && (
+          <div className={styles.beta} role="alert">
+            <span className={styles.betaTag}>Beta</span>
+            <p className={styles.betaText}>
+              This tool is in beta testing. Answers are generated automatically and may be
+              incomplete or incorrect — please verify anything important. Provided <strong>as is,
+              with no warranty</strong> of accuracy or fitness for any purpose.
+            </p>
+            <button className={styles.betaBtn} onClick={dismissBeta}>I understand</button>
+          </div>
+        )}
+
         {!overview && !loadError && (
           <div className={styles.loading}><p>Loading observatory data&hellip;</p></div>
         )}
@@ -251,6 +278,22 @@ export default function App() {
             </div>
           </>
         )}
+
+        <footer className={styles.footer}>
+          <div className={styles.footerRow}>
+            <a href={LICENSE_URL} target="_blank" rel="noreferrer" className={styles.ccLink}
+               title="Creative Commons Attribution 4.0 International">
+              <img className={styles.ccBadge} src="/cc-by.png" alt="Creative Commons BY 4.0" />
+            </a>
+            <p className={styles.footerText}>
+              Data &amp; answers &copy; University of Reading, licensed under{' '}
+              <a href={LICENSE_URL} target="_blank" rel="noreferrer">CC&nbsp;BY&nbsp;4.0</a>.
+              Data collected at the{' '}
+              <a href={OBSERVATORY_URL} target="_blank" rel="noreferrer">Atmospheric Observatory</a>.
+              Beta — provided as is, with no warranty.
+            </p>
+          </div>
+        </footer>
       </main>
     </div>
   )
