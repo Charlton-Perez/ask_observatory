@@ -21,10 +21,13 @@
 }
 
 .headerLogo {
-  height: 42px;
+  height: 34px;
   width: auto;
-  /* logo art is black; invert to white for the maroon bar */
-  filter: brightness(0) invert(1);
+  /* keep the official logo in its normal colours on a white patch */
+  background: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  box-sizing: content-box;
 }
 
 .headerText { flex: 1; }
