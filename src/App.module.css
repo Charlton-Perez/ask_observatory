@@ -21,13 +21,10 @@
 }
 
 .headerLogo {
-  height: 34px;
+  height: 42px;
   width: auto;
-  /* keep the official logo in its normal colours on a white patch */
-  background: #fff;
-  padding: 8px 12px;
-  border-radius: 6px;
-  box-sizing: content-box;
+  /* logo art is black; invert to white for the maroon bar (shield field stays transparent) */
+  filter: brightness(0) invert(1);
 }
 
 .headerText { flex: 1; }
