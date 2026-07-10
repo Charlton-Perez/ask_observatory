@@ -55,7 +55,8 @@ export default function App() {
           wmoNormals: ctx.wmoNormals,
           allTimeExtremes: ctx.allTimeExtremes,
         })
-        setExecutor(() => createToolExecutor(dayIndex))
+        const today = new Date().toISOString().slice(0, 10)
+        setExecutor(() => createToolExecutor(dayIndex, today))
       })
       .catch(e => setLoadError('Could not load dataset: ' + e.message))
   }, [hasAccess])

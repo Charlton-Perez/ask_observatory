@@ -98,19 +98,38 @@ const nextDay = (dateStr) => {
 // dayIndex: { "YYYY-MM-DD": { date, Tx, Tn, ... } } from buildDayIndex().
 // Returns execute(name, input) → { result, isError }.
 
-export function createToolExecutor(dayIndex) {
-  const rows = Object.values(dayIndex).sort((a, b) => a.date.localeCompare(b.date))
+export function createToolExecutor(dayIndex, today) {
+  // Never analyse days in the future. Defensively drop any row dated after today
+  // (guards against stray/forecast rows in the file), so lastDate is a real
+  // observed date and windows can't silently pull in non-existent days.
+  const cutoff = today || new Date().toISOString().slice(0, 10)
+  const rows = Object.values(dayIndex)
+    .filter(r => r.date && r.date <= cutoff)
+    .sort((a, b) => a.date.localeCompare(b.date))
   const firstDate = rows[0]?.date
   const lastDate = rows[rows.length - 1]?.date
 
   const err = (message) => ({ result: { error: message }, isError: true })
   const ok = (result) => ({ result, isError: false })
 
+  // Reject windows that reach past the record's end. Without this a request like
+  // "23 Jun–20 Jul" (when the record ends 8 Jul) silently returns only the days
+  // that exist, which the model can mistake for a complete 28-day period.
+  const scopeGuard = ({ start, end }) => {
+    if (start && lastDate && start > lastDate)
+      return { error: `No data: ${start} is after the last record date ${lastDate}. Dates after ${lastDate} have not been observed — do not analyse or report future periods.` }
+    if (end && lastDate && end > lastDate)
+      return { note: `Requested end ${end} is after the last record date ${lastDate}; only data up to ${lastDate} was used. This is a PARTIAL window — do NOT treat, rank, or report it as a complete period/spell.` }
+    return {}
+  }
+
   // ── get_days ────────────────────────────────────────────────────────────────
   function getDays({ start, end, fields }) {
     if (!start || !end) return err('Both start and end are required (YYYY-MM-DD).')
     const bad = validateScope({ start, end })
     if (bad) return err(bad)
+    const guard = scopeGuard({ start, end })
+    if (guard.error) return err(guard.error)
     if (fields) {
       const unknown = fields.filter(f => !NUMERIC_FIELDS.includes(f))
       if (unknown.length) return err(`Unknown field(s): ${unknown.join(', ')}. Valid: ${NUMERIC_FIELDS.join(', ')}.`)
@@ -127,6 +146,7 @@ export function createToolExecutor(dayIndex) {
       }),
       n: scoped.length,
       note: scoped.length === 0 ? `No records in range. Record covers ${firstDate} to ${lastDate}.` : undefined,
+      warning: guard.note,
     })
   }
 
@@ -140,6 +160,8 @@ export function createToolExecutor(dayIndex) {
       return err('group_by must be one of: none, year, month, year_month, decade.')
     const bad = validateScope({ start, end, months, calendar_day }) || validateFilters(filters)
     if (bad) return err(bad)
+    const guard = scopeGuard({ start, end })
+    if (guard.error) return err(guard.error)
 
     const scope = { start, end, months, calendar_day }
     const groups = new Map()
@@ -202,6 +224,7 @@ export function createToolExecutor(dayIndex) {
       }
     }
     if (missing) out.days_with_missing_value_excluded = missing
+    if (guard.note) out.warning = guard.note
     return ok(out)
   }
 
@@ -213,6 +236,8 @@ export function createToolExecutor(dayIndex) {
     if (!Number.isInteger(min_length) || min_length < 1) return err('min_length must be a positive integer.')
     const bad = validateScope({ start, end, months })
     if (bad) return err(bad)
+    const guard = scopeGuard({ start, end })
+    if (guard.error) return err(guard.error)
     top_n = Math.min(Math.max(1, top_n), MAX_RUNS_N)
 
     const scope = { start, end, months }
@@ -261,6 +286,7 @@ export function createToolExecutor(dayIndex) {
       })),
       runs_per_decade: byDecade,
       note: 'Runs require consecutive calendar dates; gaps in the record break a run. months restricts which days may belong to a run.',
+      warning: guard.note,
     })
   }
 
@@ -270,6 +296,8 @@ export function createToolExecutor(dayIndex) {
     if (!['asc', 'desc'].includes(order)) return err('order must be "asc" or "desc".')
     const bad = validateScope({ start, end, months, calendar_day }) || validateFilters(filters)
     if (bad) return err(bad)
+    const guard = scopeGuard({ start, end })
+    if (guard.error) return err(guard.error)
     n = Math.min(Math.max(1, n), MAX_RANK_N)
 
     const scope = { start, end, months, calendar_day }
@@ -287,6 +315,7 @@ export function createToolExecutor(dayIndex) {
         for (const f of extras) o[f] = r[f]
         return o
       }),
+      warning: guard.note,
     })
   }
 
