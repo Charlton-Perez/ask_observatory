@@ -2,8 +2,11 @@ name: Daily observatory data update
 
 on:
   schedule:
-    # Run at 12:00 UTC every day — data is typically updated by 12Z.
-    - cron: '0 12 * * *'
+    # Run every hour from 10:00 to 15:00 UTC — the observer enters each day's
+    # reading at a variable time within this window, so checking hourly gets
+    # the new data committed as soon as possible after it's entered, rather
+    # than waiting on one fixed guessed time.
+    - cron: '0 10-15 * * *'
   workflow_dispatch:   # also allow manual trigger from GitHub Actions UI
 
 jobs:
