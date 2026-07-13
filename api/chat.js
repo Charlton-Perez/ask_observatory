@@ -281,7 +281,7 @@ async function callGemini({ model, messages, apiKey }) {
 // NOTE: gemini currently answers without tools (text-only fallback).
 
 const PROVIDER_DEFAULTS = {
-  anthropic: { baseUrl: 'https://api.anthropic.com', model: 'claude-haiku-4-5-20251001' },
+  anthropic: { baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-5' },
   openai: { baseUrl: 'https://api.openai.com', model: 'gpt-4o-mini' },
   groq: { baseUrl: 'https://api.groq.com/openai', model: 'llama-3.1-70b-versatile' },
   mistral: { baseUrl: 'https://api.mistral.ai', model: 'mistral-small-latest' },
