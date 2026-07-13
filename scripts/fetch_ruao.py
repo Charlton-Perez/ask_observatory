@@ -28,23 +28,60 @@ from pathlib import Path
 CGI_URL = "https://metdata.reading.ac.uk/cgi-bin/climate_extract.cgi"
 BACKFILL_DAYS = 10   # how many recent days to re-check for filled-in x values
 
-# Variables to fetch — must match the column names in ruao_data.csv
+# Variables to fetch — must match the column names in ruao_data.csv.
+# The observatory CGI offers every value in its catalogue; we request the full
+# set of physical measurements available in SI / metric units. Deliberately
+# EXCLUDED: non-SI unit variants (wind in knots, temps in degF, Piche evaporation
+# in ml), categorical/coded fields (cloud oktas, visibility code), and the binary
+# threshold/event flags (hot-day, warm-night, wet-day, etc.) — the model derives
+# those itself from the base measurements via its tools.
 VARIABLES = {
-    "Pmsl": "y",   # MSL pressure (mb)
-    "Tdry": "y",   # Dry bulb temp (degC)
-    "Twet": "y",   # Wet bulb temp (degC)
-    "RH":   "y",   # Relative humidity (%)
-    "Tx":   "y",   # Maximum temperature (degC)
-    "Tn":   "y",   # Minimum temperature (degC)
-    "RR":   "y",   # Rainfall 24h from 09GMT (mm)
-    "rd":   "y",   # Rain day (1=yes)
-    "af":   "y",   # Air frost
-    "gf":   "y",   # Ground frost
-    "sd_cm":"y",   # Total snow depth (cm)
-    "sss":  "y",   # Sunshine duration (h)
-    "ff_ms":"y",   # Wind speed (m/s)
-    "dd":   "y",   # Wind direction (deg/10)
-    "ww":   "y",   # Present weather code (WMO)
+    # ── Pressure & humidity ──
+    "Pstn":  "y",  # Station pressure (hPa)
+    "Pmsl":  "y",  # MSL pressure (hPa)
+    "VP":    "y",  # Vapour pressure (hPa)
+    "Ptemp": "y",  # Barometer temperature (degC)
+    "RH":    "y",  # Relative humidity (%)
+    # ── Air / surface temperature ──
+    "Tdry":  "y",  # Dry bulb temp (degC)
+    "Twet":  "y",  # Wet bulb temp (degC)
+    "Tdew":  "y",  # Dew point (degC)
+    "Tx":    "y",  # Maximum temperature (degC)
+    "Tn":    "y",  # Minimum temperature (degC)
+    "Tg":    "y",  # Grass minimum temp (degC)
+    "Ts":    "y",  # Soil minimum temp (degC)
+    "Tc":    "y",  # Concrete minimum temp (degC)
+    "Tbar":  "y",  # Mean daily temp (degC)
+    "Tdiur": "y",  # Daily temp range (degC)
+    # ── Soil temperature profile ──
+    "E5":    "y",  # 5cm soil temp (degC)
+    "E10":   "y",  # 10cm soil temp (degC)
+    "E20":   "y",  # 20cm soil temp (degC)
+    "E30":   "y",  # 30cm soil temp (degC)
+    "E50":   "y",  # 50cm soil temp (degC)
+    "E1m":   "y",  # 100cm soil temp (degC)
+    # ── Wind ──
+    "dd":     "y", # Wind direction (deg/10)
+    "ff_ms":  "y", # Wind speed (m/s)
+    "ggx_ms": "y", # Max 3-sec gust (m/s)
+    "ggx_ms1":"y", # Max 1-sec gust (m/s)
+    "cc2":    "y", # Cup-counter wind run at 2m (km)
+    # ── Rainfall ──
+    "RR":     "y", # Rainfall 24h from 09GMT (mm)
+    "Rdur":   "y", # Rain duration from 09GMT (h)
+    "rd":     "y", # Rain day (1=yes)
+    "RR_gl":  "y", # Ground-level rain from 09GMT (mm)
+    "RR_int": "y", # Intercepted rain from 09GMT (mm)
+    # ── Frost, snow, sunshine, radiation, evaporation ──
+    "af":    "y",  # Air frost (air min < 0C)
+    "gf":    "y",  # Ground frost (grass min < 0C)
+    "sd_cm": "y",  # Total snow depth (cm)
+    "sss":   "y",  # Sunshine duration (h)
+    "skz":   "y",  # Kipp-Zonen sunshine (h)
+    "tev":   "y",  # Tank evaporation (mm)
+    "srad":  "y",  # Solar radiation (MJ/m2)
+    # ── Weather code ──
+    "ww":    "y",  # Present weather code (WMO)
 }
 
 # Fields that can meaningfully be backfilled (skip metadata columns)
@@ -85,7 +122,13 @@ def fetch_data(start: date, end: date) -> str:
     if not match:
         raise ValueError("Could not find data in response. The CGI may have changed.")
 
-    raw = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+    # The CGI lays each field on its own <br>-separated line. Turn <br> into real
+    # newlines first, then strip only well-formed HTML tags. Crucially the tag
+    # pattern forbids '<' and '>' inside, so a literal '<' in the data (e.g. an
+    # observer note "max temp<dry bulb") is NOT mistaken for a tag and the greedy
+    # match can't span across fields and swallow real values.
+    block = re.sub(r"(?i)<br\s*/?>", "\n", match.group(1))
+    raw = re.sub(r"</?[a-zA-Z][^<>\n]*>", "", block).strip()
 
     # CGI splits each row across multiple lines; continuation lines start with ','
     joined_lines = []

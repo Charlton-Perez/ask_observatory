@@ -16,6 +16,11 @@
 const NUMERIC_FIELDS = [
   'Tx', 'Tn', 'Tdry', 'Twet', 'Pmsl', 'RH', 'RR', 'rd',
   'sss', 'sd_cm', 'af', 'gf', 'ff_ms', 'dd', 'ww',
+  // Extended SI/metric variables
+  'Pstn', 'VP', 'Ptemp', 'Tdew', 'Tg', 'Ts', 'Tc', 'Tbar', 'Tdiur',
+  'E5', 'E10', 'E20', 'E30', 'E50', 'E1m',
+  'ggx_ms', 'ggx_ms1', 'cc2', 'Rdur', 'RR_gl', 'RR_int',
+  'skz', 'tev', 'srad',
 ]
 
 const OPS = {
@@ -373,6 +378,11 @@ export function describeToolCall(name, input = {}) {
 const UNIT = {
   Tx: '°C', Tn: '°C', Tdry: '°C', Twet: '°C', Pmsl: ' hPa', RH: '%',
   RR: ' mm', sss: ' h', sd_cm: ' cm', ff_ms: ' m/s',
+  Pstn: ' hPa', VP: ' hPa', Ptemp: '°C', Tdew: '°C', Tg: '°C', Ts: '°C',
+  Tc: '°C', Tbar: '°C', Tdiur: '°C', E5: '°C', E10: '°C', E20: '°C',
+  E30: '°C', E50: '°C', E1m: '°C', ggx_ms: ' m/s', ggx_ms1: ' m/s',
+  cc2: ' km', Rdur: ' h', RR_gl: ' mm', RR_int: ' mm', skz: ' h',
+  tev: ' mm', srad: ' MJ/m²',
 }
 const unit = (field) => UNIT[field] || ''
 
