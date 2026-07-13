@@ -20,7 +20,7 @@ const NUMERIC_FIELDS = [
   'Pstn', 'VP', 'Ptemp', 'Tdew', 'Tg', 'Ts', 'Tc', 'Tbar', 'Tdiur',
   'E5', 'E10', 'E20', 'E30', 'E50', 'E1m',
   'ggx_ms', 'ggx_ms1', 'cc2', 'Rdur', 'RR_gl', 'RR_int',
-  'skz', 'tev', 'srad',
+  'skz', 'tev', 'srad', 'N8',
 ]
 
 const OPS = {
@@ -382,7 +382,7 @@ const UNIT = {
   Tc: '°C', Tbar: '°C', Tdiur: '°C', E5: '°C', E10: '°C', E20: '°C',
   E30: '°C', E50: '°C', E1m: '°C', ggx_ms: ' m/s', ggx_ms1: ' m/s',
   cc2: ' km', Rdur: ' h', RR_gl: ' mm', RR_int: ' mm', skz: ' h',
-  tev: ' mm', srad: ' MJ/m²',
+  tev: ' mm', srad: ' MJ/m²', N8: ' oktas',
 }
 const unit = (field) => UNIT[field] || ''
 

@@ -45,6 +45,7 @@ export const FIELDS = [
   { key: 'skz',   label: 'Kipp-Zonen sunshine (h)',         higher: true  },
   { key: 'tev',   label: 'Tank evaporation (mm)',           higher: true  },
   { key: 'srad',  label: 'Solar radiation (MJ/m²)',         higher: true  },
+  { key: 'N8',    label: 'Cloud cover (oktas, 0-8)',        higher: null  },
 ]
 
 export const MONTH_NAMES = [

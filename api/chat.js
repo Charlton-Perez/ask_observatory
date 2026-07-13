@@ -39,7 +39,7 @@ CORE RULES
 
 FIELDS (use these exact keys in tool calls)
 Tx = daily max temp (°C) · Tn = daily min temp (°C) · Tdry = 09 UTC dry-bulb temp (°C) · Twet = wet-bulb temp (°C) · Pmsl = mean sea-level pressure (hPa) · RH = relative humidity (%) · RR = rainfall (mm; a "rain day" is rd=1) · rd = rain day flag · sss = sunshine (hrs) · sd_cm = snow depth (cm) · af = air frost flag · gf = ground frost flag · ff_ms = wind speed (m/s; ×2.237 for mph, ×1.944 for knots) · dd = wind direction in tens of degrees (×10 for degrees: 0/360=N, 9=E, 18=S, 27=W; 0 also used for calm) · ww = WMO present weather code.
-Extended fields (fewer years of coverage — soil temps from 1961, solar radiation from 1973, gusts from ~2007; missing where not measured): Pstn = station pressure (hPa) · VP = vapour pressure (hPa) · Ptemp = barometer temp (°C) · Tdew = dew point (°C) · Tg = grass minimum temp (°C) · Ts = soil minimum temp (°C) · Tc = concrete minimum temp (°C) · Tbar = mean daily temp (°C) · Tdiur = daily temp range (°C) · E5/E10/E20/E30/E50/E1m = soil temp at 5/10/20/30/50/100 cm depth (°C) · ggx_ms = max 3-sec gust (m/s) · ggx_ms1 = max 1-sec gust (m/s) · cc2 = wind run at 2 m (km/day) · Rdur = rain duration (hrs) · RR_gl = ground-level rainfall (mm) · RR_int = intercepted rainfall (mm) · skz = Kipp-Zonen sunshine (hrs) · tev = tank evaporation (mm) · srad = solar radiation (MJ/m²). These have shorter records — if a query spans years before a field existed, say so using the excluded/missing counts.
+Extended fields (fewer years of coverage — soil temps from 1961, solar radiation from 1973, gusts from ~2007; missing where not measured): Pstn = station pressure (hPa) · VP = vapour pressure (hPa) · Ptemp = barometer temp (°C) · Tdew = dew point (°C) · Tg = grass minimum temp (°C) · Ts = soil minimum temp (°C) · Tc = concrete minimum temp (°C) · Tbar = mean daily temp (°C) · Tdiur = daily temp range (°C) · E5/E10/E20/E30/E50/E1m = soil temp at 5/10/20/30/50/100 cm depth (°C) · ggx_ms = max 3-sec gust (m/s) · ggx_ms1 = max 1-sec gust (m/s) · cc2 = wind run at 2 m (km/day) · Rdur = rain duration (hrs) · RR_gl = ground-level rainfall (mm) · RR_int = intercepted rainfall (mm) · skz = Kipp-Zonen sunshine (hrs) · tev = tank evaporation (mm) · srad = solar radiation (MJ/m²) · N8 = cloud cover in oktas (eighths of sky, 0 = clear, 8 = overcast; not an SI unit). These have shorter records — if a query spans years before a field existed, say so using the excluded/missing counts.
 
 REFERENCE DEFINITIONS (all inclusive thresholds; compute via tools, don't assume pre-computed values)
 Summer day: Tx > 25. Tropical night: Tn > 20. Ice day: Tx < 0. Frost day: Tn < 0. Heavy rain day: RR >= 10. Very heavy rain day: RR >= 20. UK Met Office heatwave (SE England / Reading): Tx >= 28 for >= 3 consecutive days (use find_runs). Dry spell: RR == 0 consecutive days.
@@ -54,7 +54,7 @@ Answer concisely and directly. Use **bold** for key values and dates, short tabl
 const FIELD_ENUM = ['Tx', 'Tn', 'Tdry', 'Twet', 'Pmsl', 'RH', 'RR', 'rd', 'sss', 'sd_cm', 'af', 'gf', 'ff_ms', 'dd', 'ww',
   'Pstn', 'VP', 'Ptemp', 'Tdew', 'Tg', 'Ts', 'Tc', 'Tbar', 'Tdiur',
   'E5', 'E10', 'E20', 'E30', 'E50', 'E1m',
-  'ggx_ms', 'ggx_ms1', 'cc2', 'Rdur', 'RR_gl', 'RR_int', 'skz', 'tev', 'srad']
+  'ggx_ms', 'ggx_ms1', 'cc2', 'Rdur', 'RR_gl', 'RR_int', 'skz', 'tev', 'srad', 'N8']
 const OP_ENUM = ['>=', '<=', '>', '<', '==', '!=']
 
 const SCOPE_PROPS = {

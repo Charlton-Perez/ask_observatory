@@ -80,7 +80,8 @@ VARIABLES = {
     "skz":   "y",  # Kipp-Zonen sunshine (h)
     "tev":   "y",  # Tank evaporation (mm)
     "srad":  "y",  # Solar radiation (MJ/m2)
-    # ── Weather code ──
+    # ── Cloud & weather ──
+    "N8":    "y",  # Cloud cover (oktas, 0-8) — not SI but requested
     "ww":    "y",  # Present weather code (WMO)
 }
 
