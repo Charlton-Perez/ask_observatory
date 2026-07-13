@@ -6,7 +6,7 @@ CGI interface and keep the CSV up to date.
 Default behaviour (no arguments): fetch the last 10 days.
 For each day returned by the CGI:
   - If the date is missing from the CSV: add it.
-  - If the date is present but has x (missing) values: update those fields.
+  - If the date is present but has missing values (blank or x): update those fields.
   - If the date is complete: leave it untouched.
 
 Usage:
@@ -49,6 +49,12 @@ VARIABLES = {
 
 # Fields that can meaningfully be backfilled (skip metadata columns)
 BACKFILL_FIELDS = list(VARIABLES.keys())
+
+# A field counts as "missing" (and so is eligible to be filled in) when it is
+# blank or the literal "x". Historic gaps in the record use "x"; recently added
+# placeholder rows (date present, readings not yet entered) use empty strings.
+def is_missing(val: str) -> bool:
+    return val.strip() in ("", "x")
 
 SCRIPT_DIR = Path(__file__).parent
 CSV_PATH = SCRIPT_DIR.parent / "public" / "ruao_data.csv"
@@ -178,10 +184,10 @@ def merge_into_csv(fresh_rows: list[dict]) -> tuple[int, int]:
             existing = by_date[key]
             updated_fields = []
             for field in BACKFILL_FIELDS:
-                existing_val = existing.get(field, "x").strip()
-                fresh_val    = fresh.get(field, "x").strip()
-                if existing_val == "x" and fresh_val != "x":
-                    existing[field] = fresh_val
+                existing_val = existing.get(field, "x")
+                fresh_val    = fresh.get(field, "x")
+                if is_missing(existing_val) and not is_missing(fresh_val):
+                    existing[field] = fresh_val.strip()
                     fields_updated += 1
                     updated_fields.append(field)
                     file_changed = True

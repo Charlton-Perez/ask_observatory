@@ -9,6 +9,12 @@ on:
     - cron: '0 10-15 * * *'
   workflow_dispatch:   # also allow manual trigger from GitHub Actions UI
 
+# Never let two runs (e.g. an hourly cron and a manual dispatch) push at once —
+# overlapping pushes are what produced committed merge-conflict markers in the CSV.
+concurrency:
+  group: daily-update
+  cancel-in-progress: false
+
 jobs:
   fetch-and-commit:
     runs-on: ubuntu-latest
@@ -34,5 +40,17 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add public/ruao_data.csv
           # Only commit if there's actually something new
-          git diff --staged --quiet || git commit -m "chore: add observatory data for $(date -u -d yesterday '+%Y-%m-%d')"
-          git push
+          if git diff --staged --quiet; then
+            echo "No data changes — nothing to commit."
+            exit 0
+          fi
+          git commit -m "chore: update observatory data for $(date -u -d yesterday '+%Y-%m-%d')"
+          # Rebase onto any commits landed since checkout, then push — avoids the
+          # non-fast-forward races that previously left conflict markers in the CSV.
+          for attempt in 1 2 3; do
+            git pull --rebase --autostash origin main && git push && exit 0
+            echo "push attempt $attempt failed, retrying..."
+            sleep 5
+          done
+          echo "::error::could not push after 3 attempts"
+          exit 1
