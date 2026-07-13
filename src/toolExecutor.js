@@ -368,3 +368,58 @@ export function describeToolCall(name, input = {}) {
     default: return name
   }
 }
+
+// Units for compact display of returned values (best-effort; blank if unknown).
+const UNIT = {
+  Tx: '°C', Tn: '°C', Tdry: '°C', Twet: '°C', Pmsl: ' hPa', RH: '%',
+  RR: ' mm', sss: ' h', sd_cm: ' cm', ff_ms: ' m/s',
+}
+const unit = (field) => UNIT[field] || ''
+
+// Pull the AUTHORITATIVE headline value(s) out of a tool result, verbatim, so the
+// UI can render the exact returned numbers/dates instead of relying on the model
+// to transcribe them into prose. Returns a short array of display strings.
+export function summarizeToolResult(name, input = {}, result) {
+  if (!result || result.error) return result?.error ? [`error: ${result.error}`] : []
+  const out = []
+  switch (name) {
+    case 'aggregate': {
+      const u = unit(result.field || input.field)
+      if (result.groups) {                                   // grouped
+        const gs = result.group_summary
+        if (gs) {
+          out.push(`highest ${gs.highest.group}: ${gs.highest.value}${result.stat === 'count' ? '' : u}`)
+          out.push(`lowest ${gs.lowest.group}: ${gs.lowest.value}${result.stat === 'count' ? '' : u}`)
+        }
+        out.push(`${result.groups.length} groups`)
+      } else if (result.stat === 'count') {                  // single count
+        out.push(`count: ${result.count} of ${result.days_in_scope}${result.percent != null ? ` (${result.percent}%)` : ''}`)
+      } else if (result.value != null) {                     // single mean/min/max/sum
+        out.push(`${result.stat}: ${result.value}${u}${result.date ? ` on ${result.date}` : ''}`)
+      }
+      break
+    }
+    case 'rank_days': {
+      const u = unit(input.field)
+      for (const d of (result.days || []).slice(0, 3)) out.push(`${d.date} · ${d[input.field]}${u}`)
+      if (result.n_candidates > (result.days || []).length) out.push(`… of ${result.n_candidates} matching`)
+      break
+    }
+    case 'find_runs': {
+      const u = unit(input.field)
+      out.push(`${result.total_runs} run(s)`)
+      const lr = result.longest_runs?.[0]
+      if (lr) {
+        const pk = lr.peak || lr.lowest
+        out.push(`longest: ${lr.start}→${lr.end} (${lr.days}d)${pk ? `, peak ${pk.value}${u}` : ''}`)
+      }
+      break
+    }
+    case 'get_days': {
+      out.push(`${result.n ?? result.days?.length ?? 0} day(s) returned`)
+      break
+    }
+  }
+  if (result.warning) out.push('⚠ partial window')
+  return out
+}

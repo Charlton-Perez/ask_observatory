@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { parseCSV, buildContext, buildDayIndex } from './dataParser'
-import { createToolExecutor, describeToolCall } from './toolExecutor'
+import { createToolExecutor, describeToolCall, summarizeToolResult } from './toolExecutor'
 import styles from './App.module.css'
 
 const INVITE_TOKEN = import.meta.env.VITE_INVITE_TOKEN
@@ -121,8 +121,10 @@ export default function App() {
         const results = toolUses.map(tu => {
           const desc = describeToolCall(tu.name, tu.input)
           setActivity(desc)
-          steps.push(desc)
           const { result, isError } = executor(tu.name, tu.input)
+          // Keep the exact returned values so the UI can show ground truth
+          // verbatim, not depend on the model to transcribe them into prose.
+          steps.push({ desc, facts: summarizeToolResult(tu.name, tu.input, result) })
           return {
             type: 'tool_result',
             tool_use_id: tu.id,
@@ -244,7 +246,16 @@ export default function App() {
                   {m.steps?.length > 0 && (
                     <div className={styles.steps}>
                       <span className={styles.stepsLabel}>Computed from the daily record:</span>
-                      {m.steps.map((s, j) => <span key={j} className={styles.stepChip}>{s}</span>)}
+                      {m.steps.map((s, j) => {
+                        const desc = typeof s === 'string' ? s : s.desc
+                        const facts = typeof s === 'string' ? [] : (s.facts || [])
+                        return (
+                          <div key={j} className={styles.step}>
+                            <span className={styles.stepChip}>{desc}</span>
+                            {facts.map((f, k) => <span key={k} className={styles.stepFact}>{f}</span>)}
+                          </div>
+                        )
+                      })}
                     </div>
                   )}
                 </div>

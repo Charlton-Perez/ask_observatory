@@ -356,15 +356,23 @@
   padding-top: 8px;
   border-top: 1px dashed #d8d5d0;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 6px;
-  align-items: center;
 }
 
 .stepsLabel {
   font-size: 0.72rem;
   color: #8a94a0;
   margin-right: 2px;
+}
+
+/* One row per tool call: the call description + its exact returned values. */
+.step {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 
 .stepChip {
@@ -374,6 +382,19 @@
   padding: 2px 8px;
   font-size: 0.72rem;
   color: #6a5a55;
+  font-family: monospace;
+}
+
+/* The authoritative values returned by the tool, rendered verbatim from JSON
+   (not the model's prose) so the exact date/number is always shown correctly. */
+.stepFact {
+  background: #eef4ee;
+  border: 1px solid #cfe0cf;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  color: #2f5233;
+  font-weight: 600;
   font-family: monospace;
 }
 
