@@ -78,9 +78,18 @@ function passesFilters(row, filters) {
   return true
 }
 
-function groupKey(date, groupBy) {
+function groupKey(date, groupBy, yearStartMonth = 1) {
   switch (groupBy) {
-    case 'year':       return date.slice(0, 4)
+    case 'year': {
+      // Calendar year by default. When yearStartMonth > 1, group by a 12-month
+      // period starting that month (e.g. 7 = July→June), so winter-spanning
+      // counts stay in one bucket. Label unambiguously as "startYr/endYr".
+      if (yearStartMonth <= 1) return date.slice(0, 4)
+      const y = parseInt(date.slice(0, 4), 10)
+      const m = parseInt(date.slice(5, 7), 10)
+      const sy = m >= yearStartMonth ? y : y - 1
+      return `${sy}/${sy + 1}`
+    }
     case 'month':      return date.slice(5, 7)                          // calendar month across all years
     case 'year_month': return date.slice(0, 7)
     case 'decade':     return `${date.slice(0, 3)}0s`
@@ -151,13 +160,17 @@ export function createToolExecutor(dayIndex, today) {
   }
 
   // ── aggregate ───────────────────────────────────────────────────────────────
-  function aggregate({ field, stat, group_by = 'none', filters, start, end, months, calendar_day }) {
+  function aggregate({ field, stat, group_by = 'none', year_start_month = 1, filters, start, end, months, calendar_day }) {
     if (!stat || !['mean', 'min', 'max', 'sum', 'count'].includes(stat))
       return err('stat must be one of: mean, min, max, sum, count.')
     if (stat !== 'count' && !NUMERIC_FIELDS.includes(field))
       return err(`field is required for ${stat} and must be one of: ${NUMERIC_FIELDS.join(', ')}.`)
     if (!['none', 'year', 'month', 'year_month', 'decade'].includes(group_by))
       return err('group_by must be one of: none, year, month, year_month, decade.')
+    if (!Number.isInteger(year_start_month) || year_start_month < 1 || year_start_month > 12)
+      return err('year_start_month must be an integer 1–12.')
+    if (year_start_month !== 1 && group_by !== 'year')
+      return err('year_start_month only applies with group_by "year" (a 12-month period starting that month, e.g. 7 for July–June).')
     const bad = validateScope({ start, end, months, calendar_day }) || validateFilters(filters)
     if (bad) return err(bad)
     const guard = scopeGuard({ start, end })
@@ -169,7 +182,7 @@ export function createToolExecutor(dayIndex, today) {
 
     for (const r of rows) {
       if (!inScope(r, scope)) continue
-      const key = groupKey(r.date, group_by)
+      const key = groupKey(r.date, group_by, year_start_month)
       if (!groups.has(key)) groups.set(key, { values: [], minRow: null, maxRow: null, match: 0, total: 0 })
       const g = groups.get(key)
 
@@ -206,6 +219,10 @@ export function createToolExecutor(dayIndex, today) {
     })
 
     const out = { stat, field: stat === 'count' ? undefined : field, group_by, filters, scope: { start, end, months, calendar_day } }
+    if (group_by === 'year' && year_start_month !== 1) {
+      out.year_start_month = year_start_month
+      out.group_note = `Each group is a 12-month period starting in month ${year_start_month}; group "1997/1998" means ${year_start_month === 7 ? 'Jul 1997–Jun 1998' : `month ${year_start_month} 1997 to the month before in 1998`}. Partial first/last groups can occur at the record edges.`
+    }
     if (group_by === 'none') {
       Object.assign(out, results[0])
       delete out.group
