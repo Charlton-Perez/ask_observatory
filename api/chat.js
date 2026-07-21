@@ -57,6 +57,10 @@ const FIELD_ENUM = ['Tx', 'Tn', 'Tdry', 'Twet', 'Pmsl', 'RH', 'RR', 'rd', 'sss',
   'E5', 'E10', 'E20', 'E30', 'E50', 'E1m',
   'ggx_ms', 'ggx_ms1', 'cc2', 'Rdur', 'RR_gl', 'RR_int', 'skz', 'tev', 'srad', 'N8']
 const OP_ENUM = ['>=', '<=', '>', '<', '==', '!=']
+// rank_windows excludes dd (circular — degrees can't be meaningfully summed
+// or averaged) and ww (categorical WMO code — no valid arithmetic between
+// codes). Every other tool still accepts the full FIELD_ENUM.
+const WINDOW_FIELD_ENUM = FIELD_ENUM.filter(f => f !== 'dd' && f !== 'ww')
 
 const SCOPE_PROPS = {
   start: { type: 'string', description: 'Start date YYYY-MM-DD (inclusive). Omit for start of record.' },
@@ -131,12 +135,12 @@ const TOOLS = [
   },
   {
     name: 'rank_windows',
-    description: 'Top-N fixed-length rolling windows, e.g. "sunniest 28-day spell ever", "wettest 14-day period", "hottest 7-day stretch". Computes every possible window of window_days consecutive calendar days (a gap or missing value breaks a window), ranks by total (stat "sum") or average (stat "mean"), and collapses heavily overlapping windows to the single best-ranked slice of each distinct spell — so results are N separate real-world events, not N near-identical overlapping slices of the same event. Use this instead of aggregate/get_days for ANY "N-day spell/period/stretch" ranking question — do not try to compute rolling windows yourself from get_days or aggregate output.',
+    description: 'Top-N fixed-length rolling windows, e.g. "sunniest 28-day spell ever", "wettest 14-day period", "hottest 7-day stretch". Computes every possible window of window_days consecutive calendar days (a gap or missing value breaks a window), ranks by total (stat "sum") or average (stat "mean"), and collapses heavily overlapping windows to the single best-ranked slice of each distinct spell — so results are N separate real-world events, not N near-identical overlapping slices of the same event. Use this instead of aggregate/get_days for ANY "N-day spell/period/stretch" ranking question — do not try to compute rolling windows yourself from get_days or aggregate output. Not available for dd or ww (see field description) — those need a different approach (e.g. aggregate with group_by for weather-code frequency).',
     input_schema: {
       type: 'object',
       properties: {
-        field: { type: 'string', enum: FIELD_ENUM },
-        stat: { type: 'string', enum: ['sum', 'mean'], description: 'sum = total over the window (e.g. total sunshine hours); mean = daily average over the window. Default sum.' },
+        field: { type: 'string', enum: WINDOW_FIELD_ENUM, description: 'dd (wind direction) and ww (weather code) are excluded — both are unsuitable for summing/averaging (circular and categorical respectively).' },
+        stat: { type: 'string', enum: ['sum', 'mean'], description: 'sum = total over the window — natural for additive quantities (rainfall, sunshine hours, evaporation). mean = daily average over the window — natural for intensive quantities (temperature, pressure, humidity, wind speed). Default sum; prefer mean for temperature/pressure/humidity/wind-speed questions.' },
         window_days: { type: 'integer', minimum: 2, maximum: 366, description: 'Window length in consecutive calendar days.' },
         order: { type: 'string', enum: ['desc', 'asc'], description: 'desc = highest first (sunniest/wettest/hottest). Default desc.' },
         n: { type: 'integer', minimum: 1, maximum: 20, description: 'How many distinct, non-overlapping windows to return. Default 5.' },

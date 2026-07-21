@@ -23,6 +23,17 @@ const NUMERIC_FIELDS = [
   'skz', 'tev', 'srad', 'N8',
 ]
 
+// Fields where sum/mean over a window is not a meaningful statistic, even
+// though nothing stops the arithmetic from running: dd is a circular quantity
+// (the mean of 350deg and 10deg is ~0deg, not 180deg — summing is worse), and
+// ww is a categorical WMO code with no arithmetic relationship between values
+// (61 "light rain" and 99 "severe thunderstorm" can't be averaged). Excluded
+// from rank_windows specifically; every other tool still supports them fine.
+const NON_WINDOWABLE_FIELDS = {
+  dd: 'wind direction is circular — averaging or summing degrees gives a meaningless result (e.g. the mean of 350° and 10° is not 180°).',
+  ww: 'the weather code is categorical, not a magnitude — codes have no valid arithmetic between them (e.g. 61 "light rain" and 99 "severe thunderstorm" cannot be averaged or summed).',
+}
+
 const OPS = {
   '>=': (a, b) => a >= b,
   '<=': (a, b) => a <= b,
@@ -350,6 +361,7 @@ export function createToolExecutor(dayIndex, today) {
   // is slow and was the likely cause of a prior request timing out entirely.
   function rankWindows({ field, stat = 'sum', window_days, order = 'desc', n = 5, start, end }) {
     if (!NUMERIC_FIELDS.includes(field)) return err(`Unknown field "${field}". Valid: ${NUMERIC_FIELDS.join(', ')}.`)
+    if (NON_WINDOWABLE_FIELDS[field]) return err(`Can't rank windows of "${field}": ${NON_WINDOWABLE_FIELDS[field]}`)
     if (!['sum', 'mean'].includes(stat)) return err('stat must be "sum" or "mean".')
     if (!Number.isInteger(window_days) || window_days < 2 || window_days > MAX_WINDOW_DAYS)
       return err(`window_days must be an integer between 2 and ${MAX_WINDOW_DAYS}.`)
