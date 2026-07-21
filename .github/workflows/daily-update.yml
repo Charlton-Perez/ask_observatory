@@ -2,11 +2,13 @@ name: Daily observatory data update
 
 on:
   schedule:
-    # Run every hour from 10:00 to 15:00 UTC — the observer enters each day's
-    # reading at a variable time within this window, so checking hourly gets
-    # the new data committed as soon as possible after it's entered, rather
-    # than waiting on one fixed guessed time.
-    - cron: '0 10-15 * * *'
+    # Run every hour, round the clock. Originally limited to 10:00-15:00 UTC on
+    # the assumption the observer always enters data within that window — but
+    # ObsCode notes on real rows show entries landing well outside it (and
+    # sometimes days late, e.g. during an instrument fault), so a narrow window
+    # just adds avoidable latency once new data does appear. This repo is
+    # public, so Actions minutes are free — an idle hourly check costs nothing.
+    - cron: '0 * * * *'
   workflow_dispatch:   # also allow manual trigger from GitHub Actions UI
 
 # Never let two runs (e.g. an hourly cron and a manual dispatch) push at once —

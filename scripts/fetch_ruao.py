@@ -3,7 +3,7 @@
 Fetch daily data from the Reading University Atmospheric Observatory
 CGI interface and keep the CSV up to date.
 
-Default behaviour (no arguments): fetch the last 10 days.
+Default behaviour (no arguments): fetch the last BACKFILL_DAYS days.
 For each day returned by the CGI:
   - If the date is missing from the CSV: add it.
   - If the date is present but has missing values (blank or x): update those fields.
@@ -26,7 +26,13 @@ from pathlib import Path
 # ── Config ────────────────────────────────────────────────────────────────────
 
 CGI_URL = "https://metdata.reading.ac.uk/cgi-bin/climate_extract.cgi"
-BACKFILL_DAYS = 10   # how many recent days to re-check for filled-in x values
+# How many recent days to re-check for filled-in values on every run. The
+# observatory's own data entry can lag by over a week (e.g. an instrument
+# fault disrupts the observer's routine QC) — seen directly in this field's
+# ObsCode notes, which carry the date the row was actually processed, sometimes
+# several days after the day it describes. 30 gives real margin above that.
+BACKFILL_DAYS = 30
+STALENESS_WARN_DAYS = 3   # print a visible CI warning if the newest COMPLETE row is older than this
 
 # Variables to fetch — must match the column names in ruao_data.csv.
 # The observatory CGI offers every value in its catalogue; we request the full
@@ -247,6 +253,34 @@ def merge_into_csv(fresh_rows: list[dict]) -> tuple[int, int]:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def check_staleness():
+    """
+    Print a visible CI warning if the newest COMPLETE row (has a real Tx value,
+    not blank/x) is more than STALENESS_WARN_DAYS old. Without this, a run that
+    finds "0 rows added, 0 fields updated" looks identical to a healthy run in
+    the Actions log — that's exactly how a week-long observatory-side data-entry
+    lag went unnoticed. The '::warning::' prefix is a GitHub Actions workflow
+    command: it surfaces as a highlighted annotation on the run summary, so the
+    lag is visible without anyone reading logs line-by-line.
+    """
+    header, rows = read_csv(CSV_PATH)
+    complete_dates = [k for r in rows
+                       if (r.get("Tx") or "").strip() not in ("", "x")
+                       and (k := row_date_key(r)) is not None]
+    if not complete_dates:
+        return
+    last_complete = max(complete_dates)
+    gap = (date.today() - datetime.strptime(last_complete, "%Y-%m-%d").date()).days
+    if gap > STALENESS_WARN_DAYS:
+        print(f"::warning::Observatory data lag — newest COMPLETE observation is {last_complete} "
+              f"({gap} days old, threshold {STALENESS_WARN_DAYS}). This is usually the station's own "
+              f"data entry running behind (check recent ObsCode notes for equipment/repair notices), "
+              f"not a fetch failure — BACKFILL_DAYS={BACKFILL_DAYS} means it should self-heal once the "
+              f"observatory catches up, as long as the gap stays under {BACKFILL_DAYS} days.")
+    else:
+        print(f"Newest complete observation: {last_complete} ({gap} day(s) old) — within normal range.")
+
+
 def main():
     args = sys.argv[1:]
     today = date.today()
@@ -272,6 +306,8 @@ def main():
 
     added, updated = merge_into_csv(rows)
     print(f"\nDone — {added} row(s) added, {updated} field(s) updated.")
+
+    check_staleness()
 
 if __name__ == "__main__":
     main()
