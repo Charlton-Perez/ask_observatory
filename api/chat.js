@@ -23,7 +23,8 @@ CORE RULES
 - NEVER state a numeric answer you have not obtained from a tool result or the provided station context. Do not estimate, extrapolate, or answer from general knowledge of UK climate.
 - Every date's figure must come from that date's own row. Never restate one day's value (e.g. a peak) as if it applied to other days — if you list several dates, each must show its own, often different, value exactly as the tool returned it. To attribute exact values to specific dates, read them from rank_days / get_days output, not from a count or a run's single peak.
 - Be careful with DERIVED numbers — differences and comparisons like "X°C shy of", "X°C warmer than", "N% higher". Compute them only from two exact figures you already have, state BOTH underlying values so the gap is checkable (e.g. "34.9°C — 2.7°C below the 37.6°C record"), and double-check the subtraction. If unsure, give the two absolute values and skip the difference.
-- Prefer aggregate, rank_days and find_runs — they compute over the whole record cheaply. Use get_days only for short windows (a specific day, week or month someone asks about directly).
+- Prefer aggregate, rank_days, find_runs and rank_windows — they compute over the whole record cheaply. Use get_days only for short windows (a specific day, week or month someone asks about directly).
+- Any "N-day spell/period/stretch" ranking question ("sunniest 28-day spell", "wettest fortnight", "hottest week ever") is rank_windows — one call, done. NEVER try to compute a rolling window yourself by chaining get_days/aggregate calls across candidate date ranges: that's slow, easy to get wrong, and has caused real request timeouts. If rank_windows doesn't cover what's being asked, say so rather than manually iterating.
 - Chain tool calls freely: complex questions often need 2–4 calls (e.g. compute a count per era, then rank the extremes). You may request several tools in one turn when they are independent.
 - When comparing anything to "average" or "normal", use the wmoNormals in the station context and state the period (e.g. "compared with the 1991–2020 average of …").
 - For climate-change comparisons, use these standard eras via start/end dates: 1961-01-01→1990-12-31, 1991-01-01→2020-12-31, 2001-01-01→present, and the full record. Present era comparisons as a small table.
@@ -129,8 +130,24 @@ const TOOLS = [
     },
   },
   {
+    name: 'rank_windows',
+    description: 'Top-N fixed-length rolling windows, e.g. "sunniest 28-day spell ever", "wettest 14-day period", "hottest 7-day stretch". Computes every possible window of window_days consecutive calendar days (a gap or missing value breaks a window), ranks by total (stat "sum") or average (stat "mean"), and collapses heavily overlapping windows to the single best-ranked slice of each distinct spell — so results are N separate real-world events, not N near-identical overlapping slices of the same event. Use this instead of aggregate/get_days for ANY "N-day spell/period/stretch" ranking question — do not try to compute rolling windows yourself from get_days or aggregate output.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        field: { type: 'string', enum: FIELD_ENUM },
+        stat: { type: 'string', enum: ['sum', 'mean'], description: 'sum = total over the window (e.g. total sunshine hours); mean = daily average over the window. Default sum.' },
+        window_days: { type: 'integer', minimum: 2, maximum: 366, description: 'Window length in consecutive calendar days.' },
+        order: { type: 'string', enum: ['desc', 'asc'], description: 'desc = highest first (sunniest/wettest/hottest). Default desc.' },
+        n: { type: 'integer', minimum: 1, maximum: 20, description: 'How many distinct, non-overlapping windows to return. Default 5.' },
+        ...SCOPE_PROPS,
+      },
+      required: ['field', 'window_days'],
+    },
+  },
+  {
     name: 'get_days',
-    description: 'Fetch raw daily rows for a short date window (max 400 days) — use ONLY when the user asks about specific dates or a short period ("what was 14 October 1987 like?", "last week"). For anything statistical over longer periods, use aggregate/rank_days/find_runs instead. Optionally restrict fields to keep results small.',
+    description: 'Fetch raw daily rows for a short date window (max 400 days) — use ONLY when the user asks about specific dates or a short period ("what was 14 October 1987 like?", "last week"). For anything statistical over longer periods, use aggregate/rank_days/find_runs/rank_windows instead. Optionally restrict fields to keep results small.',
     input_schema: {
       type: 'object',
       properties: {
@@ -177,6 +194,14 @@ function withPromptCaching(messages) {
   return out
 }
 
+// Hard cap on a single model call. Without this, a slow response (e.g. the
+// model trying to reason its way through something it should have used a
+// tool for) just hangs the fetch until the *platform* kills the whole
+// function — an opaque FUNCTION_INVOCATION_TIMEOUT with no chance for us to
+// respond gracefully. Aborting client-side first, well under that ceiling,
+// lets the catch block below return a normal, friendly chat message instead.
+const MODEL_TIMEOUT_MS = 25_000
+
 async function callAnthropic({ model, messages, apiKey }) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -193,6 +218,7 @@ async function callAnthropic({ model, messages, apiKey }) {
       tools: TOOLS,
       messages: withPromptCaching(messages),
     }),
+    signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(await res.text())
   const data = await res.json()
@@ -243,6 +269,7 @@ async function callOpenAICompatible({ model, messages, baseUrl, apiKey }) {
       messages: toOpenAIMessages(messages),
       tools: TOOLS.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } })),
     }),
+    signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(await res.text())
   const data = await res.json()
@@ -272,6 +299,7 @@ async function callGemini({ model, messages, apiKey }) {
       contents,
       generationConfig: { maxOutputTokens: 3000 },
     }),
+    signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
   })
   if (!res.ok) throw new Error(await res.text())
   const data = await res.json()
@@ -317,8 +345,13 @@ async function callWithRetry(messages, maxAttempts = 3) {
     try {
       return await callModel(messages)
     } catch (err) {
+      // A timeout is deliberately NOT treated as transient — retrying would
+      // just stack another MODEL_TIMEOUT_MS wait on top and risk hitting the
+      // platform's own hard limit anyway. Fail straight to the friendly
+      // message below instead.
+      const isTimeout = err.name === 'TimeoutError' || err.name === 'AbortError'
       const msg = err.message || ''
-      const isTransient = msg.includes('overload') || msg.includes('529') || msg.includes('503')
+      const isTransient = !isTimeout && (msg.includes('overload') || msg.includes('529') || msg.includes('503'))
       if (!isTransient || attempt === maxAttempts - 1) throw err
       await new Promise(r => setTimeout(r, (attempt + 1) * 1500))
     }
@@ -352,11 +385,14 @@ export default async function handler(req) {
   } catch (err) {
     console.error('Model error:', err.message)
     const msg = (err.message || '').toLowerCase()
-    const friendly = msg.includes('overload')
-      ? 'The AI service is busy right now — please try again in a moment.'
-      : msg.includes('rate_limit') || msg.includes('rate limit')
-        ? "We've hit the usage limit for this minute — please wait a few seconds and try again."
-        : `Something went wrong: ${err.message}`
+    const isTimeout = err.name === 'TimeoutError' || err.name === 'AbortError'
+    const friendly = isTimeout
+      ? "That took too long to answer — try narrowing the question (a shorter date range, or one thing at a time) and asking again."
+      : msg.includes('overload')
+        ? 'The AI service is busy right now — please try again in a moment.'
+        : msg.includes('rate_limit') || msg.includes('rate limit')
+          ? "We've hit the usage limit for this minute — please wait a few seconds and try again."
+          : `Something went wrong: ${err.message}`
     return new Response(JSON.stringify({
       content: [{ type: 'text', text: friendly }],
       stop_reason: 'error',

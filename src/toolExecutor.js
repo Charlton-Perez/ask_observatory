@@ -36,6 +36,8 @@ const MAX_RAW_ROWS = 400
 const MAX_RANK_N   = 50
 const MAX_RUNS_N   = 25
 const MAX_GROUPS   = 250
+const MAX_WINDOW_N   = 20
+const MAX_WINDOW_DAYS = 366
 
 const round = (v, dp = 2) => (v == null ? null : +v.toFixed(dp))
 
@@ -341,14 +343,80 @@ export function createToolExecutor(dayIndex, today) {
     })
   }
 
+  // ── rank_windows ────────────────────────────────────────────────────────────
+  // Top-N fixed-length rolling windows (e.g. "sunniest 28-day spell ever").
+  // Deterministic and O(n) — computed here so the model never has to manually
+  // reason its way through rolling sums across 100+ years of daily data, which
+  // is slow and was the likely cause of a prior request timing out entirely.
+  function rankWindows({ field, stat = 'sum', window_days, order = 'desc', n = 5, start, end }) {
+    if (!NUMERIC_FIELDS.includes(field)) return err(`Unknown field "${field}". Valid: ${NUMERIC_FIELDS.join(', ')}.`)
+    if (!['sum', 'mean'].includes(stat)) return err('stat must be "sum" or "mean".')
+    if (!Number.isInteger(window_days) || window_days < 2 || window_days > MAX_WINDOW_DAYS)
+      return err(`window_days must be an integer between 2 and ${MAX_WINDOW_DAYS}.`)
+    if (!['asc', 'desc'].includes(order)) return err('order must be "asc" or "desc".')
+    const bad = validateScope({ start, end })
+    if (bad) return err(bad)
+    const guard = scopeGuard({ start, end })
+    if (guard.error) return err(guard.error)
+    n = Math.min(Math.max(1, n), MAX_WINDOW_N)
+
+    const scope = { start, end }
+    const candidates = []
+    let buf = []          // sliding buffer of the last <= window_days {date, v} entries
+    let prevDate = null
+
+    for (const r of rows) {
+      const v = r[field]
+      const contiguous = prevDate && r.date === nextDay(prevDate)
+      if (v == null || !contiguous) {
+        buf = v == null ? [] : [{ date: r.date, v }]
+      } else {
+        buf.push({ date: r.date, v })
+        if (buf.length > window_days) buf.shift()
+      }
+      if (buf.length === window_days) {
+        const wStart = buf[0].date
+        if (inScope({ date: wStart }, scope)) {
+          const sum = buf.reduce((a, b) => a + b.v, 0)
+          candidates.push({ start: wStart, end: r.date, value: round(stat === 'sum' ? sum : sum / window_days) })
+        }
+      }
+      prevDate = r.date
+    }
+
+    if (!candidates.length)
+      return err(`No complete ${window_days}-day windows found for ${field} in that scope (a gap or missing value breaks a window).`)
+
+    candidates.sort((a, b) => order === 'desc' ? b.value - a.value : a.value - b.value)
+
+    // Greedily keep only the best-ranked window from each distinct spell —
+    // without this, a single great stretch would fill the whole top-N with
+    // dozens of heavily overlapping slices of itself.
+    const chosen = []
+    for (const c of candidates) {
+      if (chosen.some(x => !(c.end < x.start || c.start > x.end))) continue
+      chosen.push(c)
+      if (chosen.length >= n) break
+    }
+
+    return ok({
+      field, stat, window_days, order, scope,
+      windows: chosen,
+      n_candidate_windows: candidates.length,
+      note: `Each window is ${window_days} consecutive calendar days (a gap or missing value breaks a window). Overlapping windows are collapsed to their single best-ranked slice, so these are ${chosen.length} distinct, non-overlapping spells — not raw day-by-day slices of the same spell.`,
+      warning: guard.note,
+    })
+  }
+
   // ── Dispatch ────────────────────────────────────────────────────────────────
   return function execute(name, input = {}) {
     try {
       switch (name) {
-        case 'get_days':  return getDays(input)
-        case 'aggregate': return aggregate(input)
-        case 'find_runs': return findRuns(input)
-        case 'rank_days': return rankDays(input)
+        case 'get_days':     return getDays(input)
+        case 'aggregate':    return aggregate(input)
+        case 'find_runs':    return findRuns(input)
+        case 'rank_days':    return rankDays(input)
+        case 'rank_windows': return rankWindows(input)
         default: return err(`Unknown tool "${name}".`)
       }
     } catch (e) {
@@ -370,6 +438,7 @@ export function describeToolCall(name, input = {}) {
     case 'aggregate': return `${input.stat} ${input.field ?? ''}${f ? ` where ${f}` : ''}${input.group_by && input.group_by !== 'none' ? ` by ${input.group_by}` : ''}${scope ? ` (${scope})` : ''}`
     case 'find_runs': return `runs of ${input.field} ${input.op} ${input.value}, ≥${input.min_length ?? 3} days${scope ? ` (${scope})` : ''}`
     case 'rank_days': return `top ${input.n ?? 10} ${input.field} (${input.order ?? 'desc'})${f ? ` where ${f}` : ''}${scope ? ` (${scope})` : ''}`
+    case 'rank_windows': return `top ${input.n ?? 5} ${input.window_days}-day ${input.stat ?? 'sum'} ${input.field} (${input.order ?? 'desc'})${scope ? ` (${scope})` : ''}`
     default: return name
   }
 }
@@ -427,6 +496,12 @@ export function summarizeToolResult(name, input = {}, result) {
     }
     case 'get_days': {
       out.push(`${result.n ?? result.days?.length ?? 0} day(s) returned`)
+      break
+    }
+    case 'rank_windows': {
+      const u = unit(input.field)
+      for (const w of (result.windows || []).slice(0, 3)) out.push(`${w.start}→${w.end}: ${w.value}${u}`)
+      if (result.windows?.length > 3) out.push(`… ${result.windows.length} windows total`)
       break
     }
   }
