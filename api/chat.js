@@ -198,13 +198,13 @@ function withPromptCaching(messages) {
   return out
 }
 
-// Hard cap on a single model call. Without this, a slow response (e.g. the
-// model trying to reason its way through something it should have used a
-// tool for) just hangs the fetch until the *platform* kills the whole
-// function — an opaque FUNCTION_INVOCATION_TIMEOUT with no chance for us to
-// respond gracefully. Aborting client-side first, well under that ceiling,
-// lets the catch block below return a normal, friendly chat message instead.
-const MODEL_TIMEOUT_MS = 25_000
+// Hard cap on a single model call. The edge runtime kills any function that
+// hasn't started RESPONDING within 25s ("did not return an initial response
+// within 25s" -> FUNCTION_INVOCATION_TIMEOUT), but once a response has started
+// streaming it may run far longer. The handler below therefore sends response
+// headers + keep-alive whitespace immediately, so this cap is no longer
+// racing the 25s platform limit and can allow a slow Sonnet turn to finish.
+const MODEL_TIMEOUT_MS = 100_000
 
 async function callAnthropic({ model, messages, apiKey }) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -383,23 +383,37 @@ export default async function handler(req) {
   if (!Array.isArray(messages) || messages.length === 0 || messages.length > MAX_MESSAGES)
     return new Response('Missing or invalid messages', { status: 400 })
 
-  try {
-    const result = await callWithRetry(messages)
-    return new Response(JSON.stringify(result), { headers: { 'Content-Type': 'application/json' } })
-  } catch (err) {
-    console.error('Model error:', err.message)
-    const msg = (err.message || '').toLowerCase()
-    const isTimeout = err.name === 'TimeoutError' || err.name === 'AbortError'
-    const friendly = isTimeout
-      ? "That took too long to answer — try narrowing the question (a shorter date range, or one thing at a time) and asking again."
-      : msg.includes('overload')
-        ? 'The AI service is busy right now — please try again in a moment.'
-        : msg.includes('rate_limit') || msg.includes('rate limit')
-          ? "We've hit the usage limit for this minute — please wait a few seconds and try again."
-          : `Something went wrong: ${err.message}`
-    return new Response(JSON.stringify({
-      content: [{ type: 'text', text: friendly }],
-      stop_reason: 'error',
-    }), { headers: { 'Content-Type': 'application/json' } })
-  }
+  // Respond IMMEDIATELY with a streamed body so the platform's 25s
+  // initial-response limit is satisfied, then keep the connection alive with
+  // whitespace (leading/trailing whitespace is valid JSON, so the client's
+  // plain `await res.json()` still works unchanged) until the model returns.
+  const enc = new TextEncoder()
+  const stream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(enc.encode(' '))
+      const keepAlive = setInterval(() => {
+        try { controller.enqueue(enc.encode(' ')) } catch { /* stream already closed */ }
+      }, 5000)
+      let payload
+      try {
+        payload = await callWithRetry(messages)
+      } catch (err) {
+        console.error('Model error:', err.message)
+        const msg = (err.message || '').toLowerCase()
+        const isTimeout = err.name === 'TimeoutError' || err.name === 'AbortError'
+        const friendly = isTimeout
+          ? "That took too long to answer — try narrowing the question (a shorter date range, or one thing at a time) and asking again."
+          : msg.includes('overload')
+            ? 'The AI service is busy right now — please try again in a moment.'
+            : msg.includes('rate_limit') || msg.includes('rate limit')
+              ? "We've hit the usage limit for this minute — please wait a few seconds and try again."
+              : `Something went wrong: ${err.message}`
+        payload = { content: [{ type: 'text', text: friendly }], stop_reason: 'error' }
+      }
+      clearInterval(keepAlive)
+      controller.enqueue(enc.encode(JSON.stringify(payload)))
+      controller.close()
+    },
+  })
+  return new Response(stream, { headers: { 'Content-Type': 'application/json' } })
 }
